@@ -247,6 +247,13 @@ export class Hub {
     const missing = cols.filter(c => !head.includes(c));
     if (!missing.length) return;
     const id = await this.ssId(module);
+    // Widen the tab first if it is too narrow for the new columns
+    const meta = await this.gfetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}?fields=sheets.properties`);
+    const sh = (meta.sheets || []).map(x => x.properties).find(pr => pr.title === tab);
+    if (!sh) throw new Error('Tab not found: ' + tab);
+    const need = head.length + missing.length - sh.gridProperties.columnCount;
+    if (need > 0) await this.gfetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}:batchUpdate`,
+      { method: 'POST', body: JSON.stringify({ requests: [{ appendDimension: { sheetId: sh.sheetId, dimension: 'COLUMNS', length: need } }] }) });
     const start = colLetter(head.length + 1);
     await this.gfetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}/values/${encodeURIComponent(tab)}!${start}1?valueInputOption=RAW`,
       { method: 'PUT', body: JSON.stringify({ values: [missing] }) });

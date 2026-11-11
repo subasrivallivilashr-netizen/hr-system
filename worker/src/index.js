@@ -800,7 +800,7 @@ const ACTIONS = {
       for (const id of p.empIds || []) {
         const sm = sums.find(x => x.EmpId === id);
         if (!sm || sm.Status !== 'Submitted') { errors.push(`${id}: not submitted`); continue; }
-        if (p.action === 'approve') {
+        if (p.decision === 'approve') {
           if (sm.TotalScore === '' || sm.TotalScore === undefined) { errors.push(`${id}: some KPIs are still empty (HR fields?)`); continue; }
           out.push({ ...clean(sm), Status: 'Approved', ApprovedBy: user.u, ApprovedAt: now });
         } else {
@@ -809,9 +809,9 @@ const ACTIONS = {
       }
       if (out.length) {
         await this.upsertMany(ss, 'KPI_Summary', ['Month', 'EmpId'], out);
-        await this.log('Performance', month, p.action === 'approve' ? 'KPIs approved' : 'KPIs returned', `${out.length} employees`, user.u);
+        await this.log('Performance', month, p.decision === 'approve' ? 'KPIs approved' : 'KPIs returned', `${out.length} employees`, user.u);
       }
-      return { message: `${out.length} ${p.action === 'approve' ? 'approved' : 'returned'}` + (errors.length ? `, ${errors.length} skipped` : ''), errors };
+      return { message: `${out.length} ${p.decision === 'approve' ? 'approved' : 'returned'}` + (errors.length ? `, ${errors.length} skipped` : ''), errors };
     }
   },
 

@@ -321,10 +321,10 @@ function drawApprove() {
 $('#apAll').onchange = () => document.querySelectorAll('.apc').forEach(c => c.checked = $('#apAll').checked);
 const picked = () => [...document.querySelectorAll('.apc:checked')].map(c => c.value);
 $('#okSel').onclick = async () => { const ids = picked(); if (!ids.length) return alert('Tick employees first.');
-  try { const r = await api('approveKpi', { month: M.month, action: 'approve', empIds: ids }); showMsg($('#m-ap'), r.message + (r.errors.length ? ' — ' + r.errors.join('; ') : ''), !r.errors.length); await loadMonth(); } catch (e) { showMsg($('#m-ap'), e.message); } };
+  try { const r = await api('approveKpi', { month: M.month, decision: 'approve', empIds: ids }); showMsg($('#m-ap'), r.message + (r.errors.length ? ' — ' + r.errors.join('; ') : ''), !r.errors.length); await loadMonth(); } catch (e) { showMsg($('#m-ap'), e.message); } };
 $('#retSel').onclick = async () => { const ids = picked(); if (!ids.length) return alert('Tick employees first.');
   const remarks = prompt('Reason for returning (the manager will see this):'); if (remarks === null) return;
-  try { const r = await api('approveKpi', { month: M.month, action: 'return', empIds: ids, remarks }); showMsg($('#m-ap'), r.message, true); await loadMonth(); } catch (e) { showMsg($('#m-ap'), e.message); } };
+  try { const r = await api('approveKpi', { month: M.month, decision: 'return', empIds: ids, remarks }); showMsg($('#m-ap'), r.message, true); await loadMonth(); } catch (e) { showMsg($('#m-ap'), e.message); } };
 $('#lockBtn').onclick = async () => {
   const lk = locked(); let reason = '';
   if (lk) { reason = prompt('Reason for unlocking ' + M.month + ':'); if (!reason) return; }

@@ -850,6 +850,50 @@ const ACTIONS = {
     }
   },
 
+  // ── Policy library (written in the app) ──
+  getPolicies: {
+    auth: true,
+    fn: async function () {
+      await this.ensureColumns('Library', 'Documents', POLICY_EXTRA);
+      const policies = (await this.read('Library', 'Documents')).map(clean);
+      const positions = (await this.read('Organisation', 'Positions')).map(clean).filter(p => p.Active !== 'No').map(p => ({ PositionCode: p.PositionCode, PositionName: p.PositionName }));
+      return { policies, positions };
+    }
+  },
+
+  savePolicy: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR], write: true,
+    fn: async function (p, user) {
+      await this.ensureColumns('Library', 'Documents', POLICY_EXTRA);
+      const all = await this.read('Library', 'Documents');
+      const x = p.policy || {};
+      if (!String(x.Title || '').trim()) throw new Error('Title is required');
+      const old = x.DocCode && all.find(d => d.DocCode === x.DocCode);
+      const row = policyRow(x, old, all, user.u);
+      await this.upsertMany('Library', 'Documents', ['DocCode'], [row]);
+      await this.log('Library', row.DocCode, old ? 'Policy updated' : 'Policy added', `${row.Title} v${row.Version}`, user.u);
+      return { message: `Saved as version ${row.Version}`, docCode: row.DocCode };
+    }
+  },
+
+  importPolicies: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR], write: true,
+    fn: async function (p, user) {
+      await this.ensureColumns('Library', 'Documents', POLICY_EXTRA);
+      const all = (await this.read('Library', 'Documents')).slice();
+      const rows = [];
+      (p.rows || []).filter(r => String(r.Title || '').trim()).forEach(r => {
+        const old = r.DocCode && all.find(d => d.DocCode === String(r.DocCode).trim().toUpperCase());
+        const row = policyRow(r, old, all.concat(rows), user.u);
+        rows.push(row);
+      });
+      if (!rows.length) throw new Error('No policies with a title found');
+      await this.upsertMany('Library', 'Documents', ['DocCode'], rows);
+      await this.log('Library', 'IMPORT', 'Policies imported', rows.length + ' policies', user.u);
+      return { message: `${rows.length} policies imported` };
+    }
+  },
+
   changeMyPassword: {
     auth: true, write: true,
     fn: async function (p, user) {
@@ -866,6 +910,22 @@ const ACTIONS = {
 
 
 // ───────────────────────── Helpers ─────────────────────────
+const POLICY_EXTRA = ['Content', 'UpdatedBy', 'UpdatedAt'];
+const POLICY_CATS = ['HR Policy', 'SOP', 'Code of Conduct', 'Compliance', 'Operations', 'Customer Service', 'Other'];
+function policyRow(x, old, all, by) {
+  let code = String(x.DocCode || '').trim().toUpperCase();
+  if (!code) { let n = all.length + 1; do { code = 'POL-' + String(n++).padStart(3, '0'); } while (all.find(d => d.DocCode === code)); }
+  const contentChanged = !old || String(old.Content || '') !== String(x.Content || '') || old.Title !== x.Title;
+  return {
+    DocCode: code, Title: String(x.Title).trim(), Category: POLICY_CATS.includes(x.Category) ? x.Category : (x.Category || 'HR Policy'),
+    Version: old ? Number(old.Version || 0) + (contentChanged ? 1 : 0) : 1,
+    EffectiveDate: x.EffectiveDate ? normDate(x.EffectiveDate) : (old ? old.EffectiveDate : new Date().toISOString().slice(0, 10)),
+    ReviewEvery: x.ReviewEvery || '1 year', Owner: x.Owner || '', ApprovedBy: x.ApprovedBy || '',
+    AppliesTo: String(x.AppliesTo || 'ALL').toUpperCase().replace(/\s+/g, ''), AckNeeded: 'No', FileKey: '',
+    Active: x.Active || 'Yes', Content: String(x.Content || ''), UpdatedBy: by, UpdatedAt: new Date().toISOString()
+  };
+}
+
 function checkMonth(m) { if (!/^\d{4}-\d{2}$/.test(m || '')) throw new Error('Month must look like 2026-10'); return m; }
 function round2(n) { return Math.round(n * 100) / 100; }
 // Achievement % (capped) and weighted score for one KPI

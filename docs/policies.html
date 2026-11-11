@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Policies</title><link rel="stylesheet" href="assets/app.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script></head>
+<body>
+<header class="top" id="top"></header>
+<main>
+  <div class="split">
+    <section class="card" id="listCard">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:6px"><h2>Policy library</h2><button class="btn" id="add">+ New</button></div>
+      <p class="sub" id="cnt"></p>
+      <input id="q" placeholder="Search title or text" style="margin-bottom:6px">
+      <select id="fPos" style="margin-bottom:6px"></select>
+      <label style="font-weight:400;margin:0 0 6px"><input type="checkbox" id="showOff" style="width:auto"> Show inactive</label>
+      <ul class="plist" id="plist"></ul>
+      <div class="noprint" id="impBtns" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
+        <button id="tpl">Download template</button><button id="imp">Import Excel</button><input type="file" id="file" accept=".xlsx,.xls" class="hidden">
+      </div>
+    </section>
+    <section class="card" id="view"><p class="sub">Choose a policy on the left.</p></section>
+  </div>
+</main>
+<script src="assets/app.js"></script>
+<script>
+const S = guard(['SuperAdmin', 'Admin', 'HR', 'Manager']);
+renderTop('policies');
+const canEdit = S && ['SuperAdmin', 'Admin', 'HR'].includes(S.role);
+if (!canEdit) { $('#impBtns').classList.add('hidden'); $('#add').classList.add('hidden'); }
+const CATS = ['HR Policy', 'SOP', 'Code of Conduct', 'Compliance', 'Operations', 'Customer Service', 'Other'];
+const REVIEW = ['6 months', '1 year', '2 years'];
+let D = null, cur = null;
+const pol = c => D.policies.find(p => p.DocCode === c);
+const pName = c => (D.positions.find(p => p.PositionCode === c) || {}).PositionName || c;
+const applies = p => !p.AppliesTo || p.AppliesTo === 'ALL' ? 'All positions' : p.AppliesTo.split(',').map(pName).join(', ');
+const fmtD = d => d ? String(d).split('-').reverse().join('-') : '';
+function reviewDue(p) {
+  if (!p.EffectiveDate) return false;
+  const d = new Date(p.EffectiveDate), m = { '6 months': 6, '1 year': 12, '2 years': 24 }[p.ReviewEvery] || 12;
+  d.setMonth(d.getMonth() + m); return d < new Date() ? d.toISOString().slice(0, 10) : false;
+}
+
+// Simple formatting: "## Heading", "- bullet", "1. numbered", **bold**, blank line = new paragraph
+function render(txt) {
+  const inline = t => esc(t).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+  let html = '', list = null;
+  const close = () => { if (list) { html += `</${list}>`; list = null; } };
+  String(txt || '').split(/\r?\n/).forEach(line => {
+    const l = line.trim(); let m;
+    if (!l) { close(); return; }
+    if ((m = l.match(/^#{1,3}\s+(.*)/))) { close(); html += `<h3>${inline(m[1])}</h3>`; }
+    else if ((m = l.match(/^[-*•]\s+(.*)/))) { if (list !== 'ul') { close(); html += '<ul>'; list = 'ul'; } html += `<li>${inline(m[1])}</li>`; }
+    else if ((m = l.match(/^\d+[.)]\s+(.*)/))) { if (list !== 'ol') { close(); html += '<ol>'; list = 'ol'; } html += `<li>${inline(m[1])}</li>`; }
+    else { close(); html += `<p>${inline(l)}</p>`; }
+  });
+  close(); return html || '<p class="sub">No content yet.</p>';
+}
+
+async function load() {
+  D = await api('getPolicies');
+  $('#fPos').innerHTML = '<option value="">All positions</option>' + D.positions.map(p => `<option value="${esc(p.PositionCode)}">Applies to: ${esc(p.PositionName)}</option>`).join('');
+  list(); const h = decodeURIComponent(location.hash.slice(1)); if (h && pol(h)) show(h); else if (cur && pol(cur)) show(cur);
+}
+function list() {
+  const q = $('#q').value.trim().toLowerCase(), ps = $('#fPos').value, off = $('#showOff').checked;
+  const items = D.policies.filter(p => (off || p.Active !== 'No') && (!q || (p.Title + ' ' + p.Content).toLowerCase().includes(q)) &&
+    (!ps || !p.AppliesTo || p.AppliesTo === 'ALL' || p.AppliesTo.split(',').includes(ps)));
+  const active = D.policies.filter(p => p.Active !== 'No');
+  $('#cnt').textContent = `${active.length} active policies` + (active.filter(reviewDue).length ? ` · ${active.filter(reviewDue).length} due for review` : '');
+  const cats = [...new Set(items.map(p => p.Category || 'Other'))].sort((a, b) => CATS.indexOf(a) - CATS.indexOf(b));
+  $('#plist').innerHTML = cats.map(c => `<li class="cat">${esc(c)}</li>` + items.filter(p => (p.Category || 'Other') === c).sort((a, b) => a.Title.localeCompare(b.Title))
+    .map(p => `<li data-c="${esc(p.DocCode)}" class="${p.DocCode === cur ? 'on' : ''}" style="${p.Active === 'No' ? 'opacity:.5' : ''}"><span>${esc(p.Title)}</span>${reviewDue(p) ? '<span class="under" style="font-size:11px">review</span>' : ''}</li>`).join('')).join('')
+    || '<li class="cat">No policies yet</li>';
+  document.querySelectorAll('#plist li[data-c]').forEach(li => li.onclick = () => { location.hash = li.dataset.c; show(li.dataset.c); });
+}
+['q'].forEach(i => $('#' + i).addEventListener('input', list));
+['fPos', 'showOff'].forEach(i => $('#' + i).addEventListener('change', list));
+
+function show(code) {
+  cur = code; list(); const p = pol(code), due = reviewDue(p);
+  $('#view').innerHTML = `<div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:start">
+      <div><h2>${esc(p.Title)}</h2><p class="sub">${esc(p.DocCode)} · ${esc(p.Category)} · Version ${esc(p.Version)} · Effective ${fmtD(p.EffectiveDate)}${p.Active === 'No' ? ' · <span class="pill no">Inactive</span>' : ''}</p></div>
+      <div class="noprint" style="display:flex;gap:6px"><button onclick="print()">Print</button>${canEdit ? '<button class="btn" id="edit">Edit</button>' : ''}</div></div>
+    ${due ? `<p class="under noprint" style="margin:0 0 10px">Review was due on ${fmtD(due)} (every ${esc(p.ReviewEvery)}). Edit and save to start a new review period.</p>` : ''}
+    <dl class="doc" style="display:grid;grid-template-columns:150px 1fr;gap:4px 12px;margin:0 0 12px"><dt style="color:var(--muted)">Applies to</dt><dd style="margin:0">${esc(applies(p))}</dd>
+      <dt style="color:var(--muted)">Owner</dt><dd style="margin:0">${esc(p.Owner) || '—'}</dd><dt style="color:var(--muted)">Approved by</dt><dd style="margin:0">${esc(p.ApprovedBy) || '—'}</dd>
+      <dt style="color:var(--muted)">Review every</dt><dd style="margin:0">${esc(p.ReviewEvery)}</dd></dl>
+    <div class="policy">${render(p.Content)}</div>`;
+  if (canEdit) $('#edit').onclick = () => edit(p);
+}
+
+function edit(p) {
+  p = p || { Category: 'HR Policy', ReviewEvery: '1 year', AppliesTo: 'ALL', Active: 'Yes', EffectiveDate: new Date().toISOString().slice(0, 10) };
+  const sel = (n, opts, v) => `<select name="${n}">${opts.map(o => `<option ${o === v ? 'selected' : ''}>${o}</option>`).join('')}</select>`;
+  const chosen = new Set(!p.AppliesTo || p.AppliesTo === 'ALL' ? [] : p.AppliesTo.split(','));
+  $('#view').innerHTML = `<h2>${p.DocCode ? 'Edit — ' + esc(p.Title) : 'New policy'}</h2><p class="sub">${p.DocCode ? 'Changing the title or text creates version ' + (Number(p.Version) + 1) + '.' : ''}</p>
+    <form id="pf"><div class="grid">
+      <div style="grid-column:1/-1"><label>Title</label><input name="Title" required value="${esc(p.Title)}"></div>
+      <div><label>Category</label>${sel('Category', CATS, p.Category)}</div>
+      <div><label>Effective date</label><input type="date" name="EffectiveDate" value="${esc(p.EffectiveDate)}"></div>
+      <div><label>Review every</label>${sel('ReviewEvery', REVIEW, p.ReviewEvery)}</div>
+      <div><label>Owner</label><input name="Owner" value="${esc(p.Owner)}" placeholder="e.g. HR Manager"></div>
+      <div><label>Approved by</label><input name="ApprovedBy" value="${esc(p.ApprovedBy)}" placeholder="e.g. Managing Director"></div>
+      <div><label>Active</label>${sel('Active', ['Yes', 'No'], p.Active)}</div>
+    </div>
+    <label>Applies to</label>
+    <label style="font-weight:400"><input type="checkbox" id="allPos" style="width:auto" ${chosen.size ? '' : 'checked'}> All positions</label>
+    <div id="posBox" class="${chosen.size ? '' : 'hidden'}" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:2px 12px;margin-bottom:8px">
+      ${D.positions.map(x => `<label style="font-weight:400;margin:2px 0"><input type="checkbox" class="pc" value="${esc(x.PositionCode)}" style="width:auto" ${chosen.has(x.PositionCode) ? 'checked' : ''}> ${esc(x.PositionName)}</label>`).join('')}</div>
+    <div style="display:flex;justify-content:space-between;align-items:end;gap:8px;flex-wrap:wrap"><label>Policy text</label>
+      <span class="hint">## Heading &nbsp;·&nbsp; - bullet &nbsp;·&nbsp; 1. numbered &nbsp;·&nbsp; **bold** &nbsp;·&nbsp; blank line = new paragraph &nbsp; <button type="button" id="prev">Preview</button></span></div>
+    <textarea class="big" name="Content" id="content">${esc(p.Content)}</textarea>
+    <div id="preview" class="policy card hidden" style="margin-top:8px"></div>
+    <div class="row-end"><span class="msg" id="m-p"></span><button type="button" id="cancel">Cancel</button><button class="btn" id="save">Save</button></div></form>`;
+  $('#allPos').onchange = () => $('#posBox').classList.toggle('hidden', $('#allPos').checked);
+  $('#prev').onclick = () => { const pv = $('#preview'); pv.innerHTML = render($('#content').value); pv.classList.toggle('hidden'); };
+  $('#cancel').onclick = () => p.DocCode ? show(p.DocCode) : ($('#view').innerHTML = '<p class="sub">Choose a policy on the left.</p>');
+  $('#pf').onsubmit = async e => {
+    e.preventDefault(); const b = $('#save'); b.disabled = true;
+    const o = { DocCode: p.DocCode || '' }; [...$('#pf').elements].forEach(el => { if (el.name) o[el.name] = el.value; });
+    const pcs = [...document.querySelectorAll('.pc:checked')].map(c => c.value);
+    o.AppliesTo = $('#allPos').checked || !pcs.length ? 'ALL' : pcs.join(',');
+    try { const r = await api('savePolicy', { policy: o }); cur = r.docCode; location.hash = r.docCode; await load(); show(r.docCode); }
+    catch (err) { showMsg($('#m-p'), err.message); b.disabled = false; }
+  };
+}
+$('#add').onclick = () => { cur = null; list(); edit(null); };
+
+// Excel
+const COLS = [['DocCode', 'Doc Code'], ['Title', 'Title'], ['Category', 'Category'], ['EffectiveDate', 'Effective Date'], ['ReviewEvery', 'Review Every'], ['Owner', 'Owner'], ['ApprovedBy', 'Approved By'], ['AppliesTo', 'Applies To'], ['Content', 'Policy Text']];
+$('#tpl').onclick = () => {
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([COLS.map(c => c[1]), ...D.policies.map(p => COLS.map(([k]) => k === 'EffectiveDate' ? fmtD(p[k]) : p[k]))]), 'Policies');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Position Code', 'Position Name'], ...D.positions.map(p => [p.PositionCode, p.PositionName])]), 'Positions (reference)');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Rules'], ['Leave Doc Code blank for a new policy (numbered automatically). Keep it to update an existing one.'], ['Category: ' + CATS.join(' / ')], ['Review Every: 6 months / 1 year / 2 years.  Effective Date: DD-MM-YYYY'], ['Applies To: ALL, or position codes separated by commas (see reference sheet).'], ['Policy Text: use ## for headings, - for bullets, 1. for numbered points, **bold**. Use Alt+Enter for new lines inside the cell.']]), 'Read Me');
+  XLSX.writeFile(wb, 'Policies_Import_Template.xlsx');
+};
+$('#imp').onclick = () => $('#file').click();
+$('#file').onchange = async () => {
+  const f = $('#file').files[0]; if (!f) return; $('#file').value = '';
+  const wb = XLSX.read(await f.arrayBuffer());
+  const aoa = XLSX.utils.sheet_to_json(wb.Sheets['Policies'] || wb.Sheets[wb.SheetNames[0]], { header: 1, raw: false, defval: '' });
+  const h = aoa.findIndex(r => r.some(c => String(c).trim().toLowerCase() === 'title')); if (h < 0) return alert('Could not find a "Title" column. Use the template.');
+  const head = aoa[h].map(x => String(x).trim().toLowerCase()), idx = COLS.map(([k, l]) => [k, head.indexOf(l.toLowerCase())]);
+  const rows = aoa.slice(h + 1).map(r => { const o = {}; idx.forEach(([k, i]) => o[k] = i >= 0 ? String(r[i]) : ''); return o; }).filter(o => o.Title.trim());
+  if (!confirm(`Import ${rows.length} policies?`)) return;
+  try { const r = await api('importPolicies', { rows }); alert(r.message); await load(); } catch (e) { alert(e.message); }
+};
+window.addEventListener('hashchange', () => { const h = decodeURIComponent(location.hash.slice(1)); if (D && pol(h)) show(h); });
+if (S) load().catch(e => alert(e.message));
+</script></body></html>

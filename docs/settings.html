@@ -2,7 +2,7 @@
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Settings</title><link rel="stylesheet" href="assets/app.css"></head>
 <body>
-<header class="top"><b id="co">HR System</b><span class="who" id="who"></span><button id="out">Sign out</button></header>
+<header class="top" id="top"></header>
 <main>
   <div class="tabs" id="tabs">
     <button data-t="company" class="on">Company</button>
@@ -83,8 +83,7 @@
 <script>
 const S = guard(['SuperAdmin', 'Admin']);
 let DATA = null;
-$('#who').textContent = S ? `${S.name} · ${S.role}` : '';
-$('#out').onclick = () => { Session.clear(); location.href = 'index.html'; };
+renderTop('settings');
 document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => {
   document.querySelectorAll('#tabs button').forEach(x => x.classList.toggle('on', x === b));
   document.querySelectorAll('main > section').forEach(s => s.classList.toggle('hidden', s.id !== 't-' + b.dataset.t));
@@ -95,7 +94,7 @@ async function load() {
   const c = DATA.company;
   ['CompanyName','ProbationDays','SameStructureAllStores','StoreLimit','EmpIdPrefix','EmpIdDigits','EmpIdNextNumber','EmpIdPerStore']
     .forEach(k => { if ($('#' + k)) $('#' + k).value = c[k] ?? ''; });
-  $('#co').textContent = c.CompanyName || 'HR System';
+  setCompanyName(c.CompanyName);
   const isSuper = S.role === 'SuperAdmin';
   $('#StoreLimit').disabled = !isSuper;
   $('#limHint').textContent = isSuper ? '' : '(set by Super Admin)';

@@ -336,6 +336,86 @@ const ACTIONS = {
     }
   },
 
+  // ── Organisation structure ──
+  getOrg: {
+    auth: true,
+    fn: async function () {
+      const positions = (await this.read('Organisation', 'Positions')).map(clean);
+      const stores = (await this.read('Settings', 'Stores')).map(clean).filter(s => s.Active !== 'No');
+      const company = {}; (await this.read('Settings', 'Company')).forEach(r => company[r.Key] = r.Value);
+      const emps = await this.read('Organisation', 'Employees');
+      const filled = {};
+      emps.filter(e => e.Status !== 'Exited').forEach(e => { const k = e.PositionCode + '|' + e.StoreCode; filled[k] = (filled[k] || 0) + 1; });
+      return { positions, stores, sameStructure: company.SameStructureAllStores !== 'No', filled };
+    }
+  },
+
+  savePosition: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR], write: true,
+    fn: async function (p, user) {
+      const x = p.position || {};
+      const positions = await this.read('Organisation', 'Positions');
+      const isNew = !x.PositionCode || !positions.find(r => r.PositionCode === x.PositionCode);
+      if (!x.PositionName) throw new Error('Position name is required');
+      if (isNew) {
+        if (!x.PositionCode) {
+          let n = positions.length + 1, code;
+          do { code = 'P-' + String(n++).padStart(3, '0'); } while (positions.find(r => r.PositionCode === code));
+          x.PositionCode = code;
+        }
+        x.PositionCode = String(x.PositionCode).trim().toUpperCase();
+      }
+      // Parent checks: must exist, must not create a loop
+      if (x.ParentPositionCode) {
+        const parent = positions.find(r => r.PositionCode === x.ParentPositionCode);
+        if (!parent) throw new Error('Parent position not found');
+        let cur = parent, guard = 0;
+        while (cur && guard++ < 50) {
+          if (cur.PositionCode === x.PositionCode) throw new Error('A position cannot report to itself or to its own team');
+          cur = positions.find(r => r.PositionCode === cur.ParentPositionCode);
+        }
+        x.Level = Number(parent.Level || 1) + 1;
+      } else {
+        const top = positions.find(r => !r.ParentPositionCode && r.Active !== 'No' && r.PositionCode !== x.PositionCode);
+        if (top) throw new Error(`Only one top position is allowed (${top.PositionName}). Choose who this position reports to.`);
+        x.Level = 1;
+      }
+      const row = {
+        PositionCode: x.PositionCode, PositionName: x.PositionName.trim(), Level: x.Level,
+        ParentPositionCode: x.ParentPositionCode || '', Branch: x.Branch || 'Sales', Department: x.Department || '',
+        StoreCode: x.StoreCode || 'ALL', ApprovedHeadcount: Number(x.ApprovedHeadcount || 1), Active: x.Active || 'Yes'
+      };
+      if (isNew) await this.append('Organisation', 'Positions', [row]);
+      else {
+        await this.update('Organisation', 'Positions', 'PositionCode', row.PositionCode, row);
+        // keep children's levels correct if this one moved
+        const all = await this.read('Organisation', 'Positions');
+        const fix = async (code, lvl) => {
+          for (const c of all.filter(r => r.ParentPositionCode === code)) {
+            if (Number(c.Level) !== lvl + 1) await this.update('Organisation', 'Positions', 'PositionCode', c.PositionCode, { Level: lvl + 1 });
+            await fix(c.PositionCode, lvl + 1);
+          }
+        };
+        await fix(row.PositionCode, row.Level);
+      }
+      await this.log('Organisation', row.PositionCode, isNew ? 'Position added' : 'Position updated', row.PositionName, user.u);
+      return { message: 'Saved', positionCode: row.PositionCode };
+    }
+  },
+
+  deactivatePosition: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR], write: true,
+    fn: async function (p, user) {
+      const positions = await this.read('Organisation', 'Positions');
+      if (positions.some(r => r.ParentPositionCode === p.positionCode && r.Active !== 'No')) throw new Error('Move or deactivate the positions under it first');
+      const emps = await this.read('Organisation', 'Employees');
+      if (emps.some(e => e.PositionCode === p.positionCode && e.Status !== 'Exited')) throw new Error('Employees are still in this position');
+      await this.update('Organisation', 'Positions', 'PositionCode', p.positionCode, { Active: 'No' });
+      await this.log('Organisation', p.positionCode, 'Position deactivated', '', user.u);
+      return { message: 'Deactivated' };
+    }
+  },
+
   changeMyPassword: {
     auth: true, write: true,
     fn: async function (p, user) {

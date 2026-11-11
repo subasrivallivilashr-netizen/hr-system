@@ -31,3 +31,18 @@ function guard(roles) {
 function $(sel, root = document) { return root.querySelector(sel); }
 function esc(v) { return String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 function showMsg(el, text, ok) { el.textContent = text; el.className = 'msg ' + (ok ? 'ok' : 'err'); }
+
+// Top bar with navigation (pages shown depend on role)
+const NAV = [
+  { key: 'org', label: 'Organisation', href: 'org.html', roles: ['SuperAdmin', 'Admin', 'HR', 'Manager'] },
+  { key: 'settings', label: 'Settings', href: 'settings.html', roles: ['SuperAdmin', 'Admin'] }
+];
+function renderTop(active, companyName) {
+  const s = Session.get(); if (!s) return;
+  const links = NAV.filter(n => n.roles.includes(s.role))
+    .map(n => `<a href="${n.href}" class="${n.key === active ? 'on' : ''}">${n.label}</a>`).join('');
+  $('#top').innerHTML = `<b id="co">${esc(companyName || s.company || 'HR System')}</b><nav class="nav">${links}</nav>
+    <span class="who">${esc(s.name)} · ${esc(s.role)}</span><button id="out">Sign out</button>`;
+  $('#out').onclick = () => { Session.clear(); location.href = 'index.html'; };
+}
+function setCompanyName(n) { const s = Session.get(); if (s && n) { s.company = n; Session.set(s); const el = $('#co'); if (el) el.textContent = n; } }

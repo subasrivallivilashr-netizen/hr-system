@@ -32,3 +32,23 @@ th{font-size:12px;text-transform:uppercase;letter-spacing:.03em;color:var(--mute
 dialog{border:0;border-radius:12px;padding:0;width:min(520px,92vw);box-shadow:0 20px 60px rgba(0,0,0,.25)}
 dialog form{padding:20px}dialog h3{margin:0 0 8px}
 .hidden{display:none}
+.nav{display:flex;gap:4px;flex:1;margin-left:16px;overflow-x:auto}
+.nav a{color:#dbe4f5;text-decoration:none;padding:6px 12px;border-radius:6px;white-space:nowrap}
+.nav a.on,.nav a:hover{background:rgba(255,255,255,.14);color:#fff}
+@media (max-width:700px){.top{flex-wrap:wrap}.top .who{display:none}.nav{order:3;flex-basis:100%;margin:6px 0 0}}
+/* Org tree */
+.toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:end;margin-bottom:12px}
+.toolbar>div{min-width:180px}
+.tree,.tree ul{list-style:none;margin:0;padding:0}
+.tree ul{margin-left:22px;padding-left:16px;border-left:2px solid var(--line)}
+.tree li{margin:8px 0;position:relative}
+.tree ul>li::before{content:"";position:absolute;left:-16px;top:22px;width:14px;border-top:2px solid var(--line)}
+.node{display:flex;align-items:center;gap:10px;background:#fff;border:1px solid var(--line);border-left:4px solid var(--brand);border-radius:8px;padding:8px 10px;flex-wrap:wrap}
+.node.Sales{border-left-color:#2e7d32}.node.Non-sales{border-left-color:#b26a00}.node.off{opacity:.5}
+.node .nm{font-weight:600}.node .meta{color:var(--muted);font-size:12px}
+.node .hc{margin-left:auto;font-size:12px}
+.node .acts{display:flex;gap:4px}.node .acts button{padding:4px 8px;font-size:12px}
+.tog{border:0;background:none;padding:0 4px;width:22px;color:var(--muted)}
+.legend{display:flex;gap:14px;font-size:12px;color:var(--muted);margin-bottom:8px;flex-wrap:wrap}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:-1px}
+.under{color:var(--err)}.over{color:#b26a00}

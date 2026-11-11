@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>KPIs</title><link rel="stylesheet" href="assets/app.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script></head>
+<body>
+<header class="top" id="top"></header>
+<main>
+  <div class="tabs" id="tabs">
+    <button data-t="params" class="on">KPI parameters</button>
+    <button data-t="bands">Rating bands</button>
+    <button data-t="soon" title="Part 2">Monthly entry</button>
+    <button data-t="soon" title="Part 2">Approval</button>
+    <button data-t="soon" title="Part 3">Reports</button>
+  </div>
+
+  <section id="t-params">
+    <div class="split">
+      <section class="card">
+        <h2>Positions</h2><p class="sub" id="cov"></p>
+        <ul class="plist" id="plist"></ul>
+        <div id="impBtns" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
+          <button id="tpl">Download template</button><button id="imp">Import Excel</button><input type="file" id="file" accept=".xlsx,.xls" class="hidden">
+        </div>
+      </section>
+      <section class="card" id="view"><p class="sub">Choose a position.</p></section>
+    </div>
+  </section>
+
+  <section id="t-bands" class="card hidden" style="max-width:720px">
+    <h2>Rating bands</h2><p class="sub">The total KPI score (out of 100, can go higher with over-achievement) decides the band.</p>
+    <table><thead><tr><th>Band</th><th>Min score</th><th>Max score</th><th>Meaning</th><th></th></tr></thead><tbody id="bandRows"></tbody></table>
+    <div class="row-end"><button id="addBand">+ Add band</button><span class="msg" id="m-b"></span><button class="btn" id="saveBands">Save</button></div>
+  </section>
+
+  <section id="t-soon" class="card hidden"><h2>Coming next</h2><p class="sub">Monthly entry, approval and reports are being built in the next parts.</p></section>
+</main>
+
+<dialog id="dK"><form method="dialog" id="fK">
+  <h3 id="dKT">KPI</h3>
+  <div class="grid">
+    <div style="grid-column:1/-1"><label>KPI name</label><input name="KpiName" required placeholder="e.g. Sales achievement"></div>
+    <div><label>Category</label><select name="Category"><option>Sales</option><option>Operations</option><option>Customer</option><option>People</option><option>Learning</option><option>Discipline</option></select></div>
+    <div><label>Unit</label><select name="Unit"><option>%</option><option>Rs</option><option>Count</option><option>Days</option><option>Score</option></select></div>
+    <div><label>Direction</label><select name="Direction"><option>Higher is better</option><option>Lower is better</option></select></div>
+    <div><label>Monthly target</label><input name="Target" type="number" step="any" required></div>
+    <div><label>Weight %</label><input name="WeightPct" type="number" step="any" min="1" max="100" required></div>
+    <div><label>Score cap % <span class="hint">(max credit)</span></label><input name="ScoreCapPct" type="number" min="100" value="100"></div>
+    <div><label>Entered by</label><select name="EnteredBy"><option>Reporting Manager</option><option>HR</option></select></div>
+    <div><label>Evidence needed</label><select name="EvidenceNeeded"><option>No</option><option>Yes</option></select></div>
+    <div style="grid-column:1/-1"><label>Definition / how measured</label><input name="Definition" placeholder="e.g. Actual sales ÷ monthly target × 100"></div>
+  </div>
+  <div class="row-end"><span class="msg" id="m-k"></span><button value="cancel" formnovalidate>Cancel</button><button class="btn" id="sK">Save</button></div>
+</form></dialog>
+
+<script src="assets/app.js"></script>
+<script>
+const S = guard(['SuperAdmin', 'Admin', 'HR', 'Manager']);
+renderTop('kpi');
+const canEdit = S && ['SuperAdmin', 'Admin', 'HR'].includes(S.role);
+if (!canEdit) $('#impBtns').classList.add('hidden');
+let D = null, cur = null, editName = null;
+const pos = c => D.positions.find(p => p.PositionCode === c);
+const kpisOf = c => D.params.filter(k => k.PositionCode === c);
+const total = c => kpisOf(c).reduce((a, k) => a + Number(k.WeightPct || 0), 0);
+
+document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('#tabs button').forEach(x => x.classList.toggle('on', x === b));
+  ['params', 'bands', 'soon'].forEach(t => $('#t-' + t).classList.toggle('hidden', t !== b.dataset.t));
+});
+
+async function load() { D = await api('getKpiSetup'); list(); bands(); if (cur) show(cur); }
+
+function ordered() {
+  const out = [], walk = (code, d) => D.positions.filter(p => (p.ParentPositionCode || '') === code).sort((a, b) => a.PositionName.localeCompare(b.PositionName)).forEach(p => { out.push([p, d]); walk(p.PositionCode, d + 1); });
+  walk('', 0); D.positions.forEach(p => { if (!out.find(o => o[0] === p)) out.push([p, 0]); });
+  return out;
+}
+function list() {
+  const ok = D.positions.filter(p => Math.abs(total(p.PositionCode) - 100) < 0.01).length;
+  $('#cov').textContent = `${ok} of ${D.positions.length} positions ready (weights = 100%)`;
+  $('#plist').innerHTML = ordered().map(([p, d]) => {
+    const t = total(p.PositionCode), n = kpisOf(p.PositionCode).length;
+    const tag = !n ? '<span class="dot"></span>' : Math.abs(t - 100) < 0.01 ? '<span class="dot ok"></span>' : `<span class="under" style="font-size:12px">${t}%</span>`;
+    return `<li data-c="${esc(p.PositionCode)}" class="${p.PositionCode === cur ? 'on' : ''}"><span style="padding-left:${d * 12}px">${esc(p.PositionName)}</span>${tag}</li>`;
+  }).join('');
+  document.querySelectorAll('#plist li').forEach(li => li.onclick = () => show(li.dataset.c));
+}
+
+function show(code) {
+  cur = code; list();
+  const p = pos(code), ks = kpisOf(code), t = total(code);
+  const state = !ks.length ? '<span class="sub">No KPIs yet.</span>' : Math.abs(t - 100) < 0.01 ? '<span class="pill yes">Weights total 100% ✓</span>' : `<span class="pill no">Weights total ${t}% — must be 100%</span>`;
+  $('#view').innerHTML = `<div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:start">
+      <div><h2>${esc(p.PositionName)}</h2><p class="sub">${esc(p.PositionCode)} · ${esc(p.Branch)} · ${state}</p></div>
+      ${canEdit ? '<button class="btn" id="addK">+ Add KPI</button>' : ''}</div>
+    <div class="tbl-wrap"><table><thead><tr><th>KPI</th><th>Category</th><th>Target</th><th>Direction</th><th>Weight</th><th>Cap</th><th>Entered by</th><th></th></tr></thead><tbody>
+    ${ks.map((k, i) => `<tr><td><b>${esc(k.KpiName)}</b><div class="sub" style="margin:0;font-size:12px">${esc(k.Definition)}</div></td><td>${esc(k.Category)}</td><td>${esc(k.Target)} ${esc(k.Unit)}</td><td>${k.Direction === 'Lower is better' ? '↓ Lower' : '↑ Higher'}</td><td>${esc(k.WeightPct)}%</td><td>${esc(k.ScoreCapPct)}%</td><td>${esc(k.EnteredBy)}</td>
+      <td>${canEdit ? `<button data-e="${i}">Edit</button> <button data-r="${i}">Remove</button>` : ''}</td></tr>`).join('') || ''}
+    </tbody></table></div>
+    <p class="sub" style="margin-top:12px">Score per KPI = achievement % (capped) × weight. Higher is better: actual ÷ target. Lower is better: target ÷ actual (when the target is 0: 0 → 100%, 1 → 70%, 2 → 40%, 3+ → 0%).</p>`;
+  if (!canEdit) return;
+  $('#addK').onclick = () => openK(null);
+  document.querySelectorAll('[data-e]').forEach(b => b.onclick = () => openK(ks[b.dataset.e]));
+  document.querySelectorAll('[data-r]').forEach(b => b.onclick = async () => {
+    const k = ks[b.dataset.r]; if (!confirm(`Remove "${k.KpiName}" from ${p.PositionName}?`)) return;
+    try { await api('removeKpiParam', { positionCode: code, kpiName: k.KpiName }); await load(); } catch (e) { alert(e.message); }
+  });
+}
+
+function openK(k) {
+  editName = k ? k.KpiName : null;
+  const f = $('#fK');
+  [...f.elements].forEach(el => { if (el.name) el.value = k ? (k[el.name] ?? '') : (el.tagName === 'SELECT' ? el.options[0].value : el.name === 'ScoreCapPct' ? 100 : ''); });
+  if (!k) f.WeightPct.value = Math.max(0, 100 - total(cur)) || '';
+  $('#dKT').textContent = (k ? 'Edit KPI — ' : 'Add KPI — ') + pos(cur).PositionName; $('#m-k').textContent = '';
+  $('#dK').showModal();
+}
+$('#sK').onclick = async e => {
+  e.preventDefault(); const f = $('#fK'); if (!f.reportValidity()) return;
+  const o = { PositionCode: cur }; [...f.elements].forEach(el => { if (el.name) o[el.name] = el.value.trim(); });
+  try { await api('saveKpiParam', { param: o, originalName: editName }); $('#dK').close(); await load(); } catch (err) { showMsg($('#m-k'), err.message); }
+};
+
+// Rating bands
+function bands() {
+  $('#bandRows').innerHTML = D.bands.map(b => `<tr><td><input class="bB" value="${esc(b.Band)}" style="width:70px"></td><td><input class="bMin" type="number" step="any" value="${esc(b.MinScore)}"></td><td><input class="bMax" type="number" step="any" value="${esc(b.MaxScore)}"></td><td><input class="bM" value="${esc(b.Meaning)}"></td><td><button class="bDel">✕</button></td></tr>`).join('');
+  document.querySelectorAll('.bDel').forEach(b => b.onclick = () => b.closest('tr').remove());
+  if (!canEdit) document.querySelectorAll('#t-bands input,#t-bands button').forEach(x => x.disabled = true);
+}
+$('#addBand').onclick = () => { D.bands = readBands().concat([{ Band: '', MinScore: 0, MaxScore: 0, Meaning: '' }]); bands(); };
+const readBands = () => [...document.querySelectorAll('#bandRows tr')].map(r => ({ Band: r.querySelector('.bB').value, MinScore: r.querySelector('.bMin').value, MaxScore: r.querySelector('.bMax').value, Meaning: r.querySelector('.bM').value }));
+$('#saveBands').onclick = async () => { try { await api('saveBands', { bands: readBands() }); showMsg($('#m-b'), 'Saved', true); await load(); } catch (e) { showMsg($('#m-b'), e.message); } };
+
+// Excel
+const COLS = [['PositionCode','Position Code'],['KpiName','KPI Name'],['Category','Category'],['Definition','Definition / How Measured'],['Unit','Unit'],['Direction','Direction'],['Target','Target'],['WeightPct','Weight %'],['ScoreCapPct','Score Cap %'],['EnteredBy','Entered By'],['EvidenceNeeded','Evidence Needed']];
+$('#tpl').onclick = () => {
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([COLS.map(c => c[1]), ...D.params.map(k => COLS.map(([c]) => k[c]))]), 'KPI Parameters');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Position Code', 'Position Name'], ...D.positions.map(p => [p.PositionCode, p.PositionName])]), 'Positions (reference)');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Rules'], ['One row per KPI per position. Weights of each position must add up to 100.'], ['Category: Sales / Operations / Customer / People / Learning / Discipline'], ['Unit: % / Rs / Count / Days / Score.  Direction: Higher is better / Lower is better'], ['Score Cap % = maximum credit for over-achievement (100 or more, e.g. 120).'], ['Entered By: Reporting Manager / HR.  Importing a position replaces all its KPIs.']]), 'Read Me');
+  XLSX.writeFile(wb, 'KPI_Import_Template.xlsx');
+};
+$('#imp').onclick = () => $('#file').click();
+$('#file').onchange = async () => {
+  const f = $('#file').files[0]; if (!f) return; $('#file').value = '';
+  const wb = XLSX.read(await f.arrayBuffer());
+  const ws = wb.Sheets['KPI Parameters'] || wb.Sheets[wb.SheetNames[0]];
+  const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '' });
+  const h = aoa.findIndex(r => r.some(c => String(c).trim().toLowerCase() === 'kpi name'));
+  if (h < 0) return alert('Could not find a "KPI Name" column. Use the downloaded template.');
+  const head = aoa[h].map(x => String(x).trim().toLowerCase());
+  const idx = COLS.map(([k, l]) => [k, head.findIndex(x => x.startsWith(l.toLowerCase()))]);
+  const rows = aoa.slice(h + 1).map(r => { const o = {}; idx.forEach(([k, i]) => o[k] = i >= 0 ? String(r[i]).trim() : ''); return o; }).filter(o => o.PositionCode && o.KpiName);
+  if (!confirm(`Import ${rows.length} KPIs? Positions in the file will have their KPIs replaced.`)) return;
+  try { const r = await api('importKpiParams', { rows }); alert(r.message); await load(); } catch (e) { alert(e.message); }
+};
+
+if (S) load().catch(e => alert(e.message));
+</script></body></html>

@@ -240,6 +240,19 @@ export class Hub {
     return version;
   }
 
+  // Adds any missing column headings to row 1 of a tab
+  async ensureColumns(module, tab, cols) {
+    const head = await this.headers(module, tab);
+    const missing = cols.filter(c => !head.includes(c));
+    if (!missing.length) return;
+    const id = await this.ssId(module);
+    const start = colLetter(head.length + 1);
+    await this.gfetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}/values/${encodeURIComponent(tab)}!${start}1?valueInputOption=RAW`,
+      { method: 'PUT', body: JSON.stringify({ values: [missing] }) });
+    this.headCache.set(module + '/' + tab, head.concat(missing));
+    this.cache.delete(module + '/' + tab);
+  }
+
   async log(module, recordId, action, remarks, doneBy) {
     try {
       await this.append('ActivityLog', 'Activity_Log', [{ Timestamp: new Date().toISOString(), Module: module, RecordId: recordId, Action: action, Remarks: remarks, DoneBy: doneBy }]);
@@ -256,7 +269,7 @@ export class Hub {
     return this._sKey;
   }
   async makeSession(user) {
-    const payload = b64urlStr(JSON.stringify({ u: user.Username, r: user.Role, n: user.FullName, exp: Date.now() + SESSION_HOURS * 3600000 }));
+    const payload = b64urlStr(JSON.stringify({ u: user.Username, r: user.Role, n: user.FullName, e: user.EmpId || '', exp: Date.now() + SESSION_HOURS * 3600000 }));
     const sig = await crypto.subtle.sign('HMAC', await this.sessionKey(), enc.encode(payload));
     return payload + '.' + b64url(sig);
   }
@@ -310,7 +323,7 @@ const ACTIONS = {
       if (!u || u.Active !== 'Yes' || !(await checkPassword(p.password || '', u.Salt, u.PasswordHash))) {
         throw new Error('Invalid username or password');
       }
-      return { token: await this.makeSession(u), role: u.Role, fullName: u.FullName, stores: u.StoreCodes };
+      return { token: await this.makeSession(u), role: u.Role, fullName: u.FullName, stores: u.StoreCodes, empId: u.EmpId || '' };
     }
   },
 
@@ -323,10 +336,13 @@ const ACTIONS = {
       const company = {};
       (await this.read('Settings', 'Company')).forEach(r => company[r.Key] = r.Value);
       const stores = (await this.read('Settings', 'Stores')).map(clean);
+      await this.ensureColumns('Settings', 'Users', ['EmpId']);
       const users = (await this.read('Settings', 'Users')).map(u => ({
-        Username: u.Username, Role: u.Role, FullName: u.FullName, StoreCodes: u.StoreCodes, Active: u.Active, CreatedAt: u.CreatedAt
+        Username: u.Username, Role: u.Role, FullName: u.FullName, StoreCodes: u.StoreCodes, Active: u.Active, CreatedAt: u.CreatedAt, EmpId: u.EmpId || ''
       }));
-      return { company, stores, users };
+      const employees = (await this.read('Organisation', 'Employees')).filter(e => e.Status !== 'Exited')
+        .map(e => ({ EmpId: e.EmpId, FullName: e.FullName, PositionCode: e.PositionCode, StoreCode: e.StoreCode }));
+      return { company, stores, users, employees };
     }
   },
 
@@ -379,7 +395,8 @@ const ACTIONS = {
       const users = await this.read('Settings', 'Users');
       const exists = users.find(x => String(x.Username).toLowerCase() === username);
       if (exists && exists.Role === ROLES.SUPER && user.r !== ROLES.SUPER) throw new Error('Only a Super Admin can change a Super Admin');
-      const changes = { FullName: u.FullName, Role: u.Role, StoreCodes: u.StoreCodes, Active: u.Active };
+      await this.ensureColumns('Settings', 'Users', ['EmpId']);
+      const changes = { FullName: u.FullName, Role: u.Role, StoreCodes: u.StoreCodes, Active: u.Active, EmpId: u.EmpId };
       Object.keys(changes).forEach(k => changes[k] === undefined && delete changes[k]);
       if (u.Password) {
         if (u.Password.length < 8) throw new Error('Password must be at least 8 characters');
@@ -591,6 +608,81 @@ const ACTIONS = {
     }
   },
 
+  // ── KPI setup ──
+  getKpiSetup: {
+    auth: true,
+    fn: async function () {
+      const positions = (await this.read('Organisation', 'Positions')).map(clean).filter(p => p.Active !== 'No');
+      const params = (await this.read('Performance', 'KPI_Parameters')).map(clean).filter(k => k.Active !== 'No');
+      let bands = (await this.read('Performance', 'Rating_Bands')).map(clean);
+      if (!bands.length) bands = DEFAULT_BANDS;
+      return { positions, params, bands };
+    }
+  },
+
+  saveKpiParam: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR], write: true,
+    fn: async function (p, user) {
+      const positions = await this.read('Organisation', 'Positions');
+      const k = normKpi(p.param || {}, positions);
+      const all = (await this.read('Performance', 'KPI_Parameters')).map(clean);
+      const origKey = p.originalName ? k.PositionCode + '|' + p.originalName : null;
+      const key = x => x.PositionCode + '|' + x.KpiName;
+      if (all.find(x => key(x) === key(k) && key(x) !== origKey && x.Active !== 'No')) throw new Error('This position already has a KPI with that name');
+      const rest = all.filter(x => key(x) !== (origKey || key(k)) && key(x) !== key(k));
+      rest.push(k);
+      await this.rewriteTab('Performance', 'KPI_Parameters', rest);
+      await this.log('Performance', k.PositionCode, origKey ? 'KPI updated' : 'KPI added', k.KpiName, user.u);
+      return { message: 'Saved' };
+    }
+  },
+
+  removeKpiParam: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR], write: true,
+    fn: async function (p, user) {
+      const all = (await this.read('Performance', 'KPI_Parameters')).map(clean);
+      const left = all.filter(x => !(x.PositionCode === p.positionCode && x.KpiName === p.kpiName));
+      await this.rewriteTab('Performance', 'KPI_Parameters', left);
+      await this.log('Performance', p.positionCode, 'KPI removed', p.kpiName, user.u);
+      return { message: 'Removed' };
+    }
+  },
+
+  importKpiParams: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR], write: true,
+    fn: async function (p, user) {
+      const positions = await this.read('Organisation', 'Positions');
+      const errors = [], rows = [];
+      (p.rows || []).forEach((r, i) => { try { rows.push(normKpi(r, positions)); } catch (e) { errors.push(`Row ${i + 1}: ${e.message}`); } });
+      const byPos = {};
+      rows.forEach(r => (byPos[r.PositionCode] = byPos[r.PositionCode] || []).push(r));
+      Object.entries(byPos).forEach(([code, list]) => {
+        const total = list.reduce((a, b) => a + Number(b.WeightPct), 0);
+        if (Math.abs(total - 100) > 0.01) errors.push(`${code}: weights add up to ${total}%, must be 100%`);
+        const names = list.map(x => x.KpiName.toLowerCase());
+        if (new Set(names).size !== names.length) errors.push(`${code}: the same KPI name appears twice`);
+      });
+      if (errors.length) throw new Error('Nothing imported. Fix these first:\n' + errors.slice(0, 15).join('\n'));
+      const keep = (await this.read('Performance', 'KPI_Parameters')).map(clean).filter(x => !byPos[x.PositionCode]);
+      await this.rewriteTab('Performance', 'KPI_Parameters', keep.concat(rows));
+      await this.log('Performance', 'IMPORT', 'KPI parameters imported', `${rows.length} KPIs, ${Object.keys(byPos).length} positions`, user.u);
+      return { message: `${rows.length} KPIs imported for ${Object.keys(byPos).length} positions` };
+    }
+  },
+
+  saveBands: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR], write: true,
+    fn: async function (p, user) {
+      const bands = (p.bands || []).map(b => ({ Band: String(b.Band || '').trim(), MinScore: Number(b.MinScore), MaxScore: Number(b.MaxScore), Meaning: b.Meaning || '' }))
+        .filter(b => b.Band).sort((a, b) => b.MinScore - a.MinScore);
+      if (!bands.length) throw new Error('Add at least one band');
+      if (bands.some(b => isNaN(b.MinScore) || isNaN(b.MaxScore) || b.MinScore > b.MaxScore)) throw new Error('Each band needs a valid min and max score');
+      await this.rewriteTab('Performance', 'Rating_Bands', bands);
+      await this.log('Performance', 'BANDS', 'Rating bands saved', bands.map(b => b.Band).join(','), user.u);
+      return { message: 'Saved' };
+    }
+  },
+
   changeMyPassword: {
     auth: true, write: true,
     fn: async function (p, user) {
@@ -607,6 +699,32 @@ const ACTIONS = {
 
 
 // ───────────────────────── Helpers ─────────────────────────
+const DEFAULT_BANDS = [
+  { Band: 'A', MinScore: 90, MaxScore: 999, Meaning: 'Outstanding' },
+  { Band: 'B', MinScore: 75, MaxScore: 89.99, Meaning: 'Good' },
+  { Band: 'C', MinScore: 60, MaxScore: 74.99, Meaning: 'Needs improvement' },
+  { Band: 'D', MinScore: 0, MaxScore: 59.99, Meaning: 'Poor - action plan needed' }
+];
+const KPI_CATS = ['Sales', 'Operations', 'Customer', 'People', 'Learning', 'Discipline'];
+function normKpi(x, positions) {
+  const k = {
+    PositionCode: String(x.PositionCode || '').trim().toUpperCase(), KpiName: String(x.KpiName || '').trim(),
+    Category: x.Category || 'Operations', Definition: x.Definition || '', Unit: x.Unit || '%',
+    Direction: /lower/i.test(x.Direction || '') ? 'Lower is better' : 'Higher is better',
+    Target: Number(x.Target), WeightPct: Number(String(x.WeightPct).replace('%', '')),
+    ScoreCapPct: Number(String(x.ScoreCapPct || 100).replace('%', '')), EnteredBy: x.EnteredBy || 'Reporting Manager',
+    EvidenceNeeded: x.EvidenceNeeded || 'No', Active: 'Yes'
+  };
+  if (!positions.find(p => p.PositionCode === k.PositionCode && p.Active !== 'No')) throw new Error('Unknown position code: ' + k.PositionCode);
+  if (!k.KpiName) throw new Error('KPI name is required');
+  if (!KPI_CATS.includes(k.Category)) throw new Error('Category must be one of: ' + KPI_CATS.join(', '));
+  if (isNaN(k.Target)) throw new Error(`${k.KpiName}: target must be a number`);
+  if (isNaN(k.WeightPct) || k.WeightPct <= 0 || k.WeightPct > 100) throw new Error(`${k.KpiName}: weight must be between 1 and 100`);
+  if (isNaN(k.ScoreCapPct) || k.ScoreCapPct < 100) throw new Error(`${k.KpiName}: score cap must be 100 or more`);
+  return k;
+}
+function colLetter(n) { let s = ''; while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; }
+
 const EMP_FIELDS = ['EmpId', 'FullName', 'Gender', 'DOB', 'Phone', 'Email', 'StoreCode', 'PositionCode', 'ReportingManagerId', 'JoiningDate', 'EmploymentType', 'Status', 'ProbationEndDate', 'CandidateAppNo', 'ExitDate'];
 // Accepts DD-MM-YYYY, DD/MM/YYYY or YYYY-MM-DD; stores YYYY-MM-DD
 function normDate(v) {

@@ -42,7 +42,7 @@
 
   <section id="t-users" class="card hidden">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><div><h2>Users</h2><p class="sub">People who can log in.</p></div><button class="btn" id="addUser">+ Add user</button></div>
-    <div class="tbl-wrap"><table><thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Stores</th><th>Active</th><th></th></tr></thead><tbody id="userRows"></tbody></table></div>
+    <div class="tbl-wrap"><table><thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Stores</th><th>Employee</th><th>Active</th><th></th></tr></thead><tbody id="userRows"></tbody></table></div>
   </section>
 
   <section id="t-me" class="card hidden" style="max-width:420px">
@@ -73,6 +73,7 @@
     <div><label>Username (email)</label><input name="Username" required></div>
     <div><label>Role</label><select name="Role" id="roleSel"></select></div>
     <div><label>Stores (codes, or ALL)</label><input name="StoreCodes" value="ALL"></div>
+    <div style="grid-column:1/-1"><label>Linked employee <span style="font-weight:400;color:var(--muted)">(needed for managers: their team = people reporting to this employee)</span></label><select name="EmpId" id="empSel"></select></div>
     <div><label>Active</label><select name="Active"><option>Yes</option><option>No</option></select></div>
     <div><label id="pwL">Password (min 8)</label><input name="Password" type="password"></div>
   </div>
@@ -127,7 +128,7 @@ function renderStores() {
   document.querySelectorAll('[data-es]').forEach(b => b.onclick = () => openStore(st[b.dataset.es]));
 }
 function renderUsers() {
-  $('#userRows').innerHTML = DATA.users.map((u, i) => `<tr><td>${esc(u.FullName)}</td><td>${esc(u.Username)}</td><td>${esc(u.Role)}</td><td>${esc(u.StoreCodes)}</td><td>${pill(u.Active)}</td><td>${u.Role === 'SuperAdmin' && S.role !== 'SuperAdmin' ? '' : `<button data-eu="${i}">Edit</button>`}</td></tr>`).join('');
+  $('#userRows').innerHTML = DATA.users.map((u, i) => `<tr><td>${esc(u.FullName)}</td><td>${esc(u.Username)}</td><td>${esc(u.Role)}</td><td>${esc(u.StoreCodes)}</td><td>${esc(u.EmpId || '—')}</td><td>${pill(u.Active)}</td><td>${u.Role === 'SuperAdmin' && S.role !== 'SuperAdmin' ? '' : `<button data-eu="${i}">Edit</button>`}</td></tr>`).join('');
   document.querySelectorAll('[data-eu]').forEach(b => b.onclick = () => openUser(DATA.users[b.dataset.eu]));
 }
 
@@ -148,6 +149,7 @@ $('#sStore').onclick = async e => {
 function openUser(u) {
   const roles = S.role === 'SuperAdmin' ? ['SuperAdmin','Admin','HR','Manager'] : ['Admin','HR','Manager'];
   $('#roleSel').innerHTML = roles.map(r => `<option>${r}</option>`).join('');
+  $('#empSel').innerHTML = '<option value="">— Not linked —</option>' + (DATA.employees || []).map(e => `<option value="${esc(e.EmpId)}">${esc(e.EmpId)} · ${esc(e.FullName)} · ${esc(e.StoreCode)}</option>`).join('');
   const f = $('#fUser'); fill(f, u || { StoreCodes: 'ALL' }); f.Username.readOnly = !!u; f.Password.value = '';
   $('#pwL').textContent = u ? 'New password (leave blank to keep)' : 'Password (min 8)';
   $('#dUserT').textContent = u ? 'Edit user' : 'Add user'; $('#m-user').textContent = '';

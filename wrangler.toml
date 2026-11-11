@@ -1,0 +1,20 @@
+name = "hr-api"
+main = "worker/src/index.js"
+compatibility_date = "2025-09-01"
+workers_dev = true
+
+[vars]
+SETTINGS_SHEET_ID = "1N4AZs_TK3oLkoPdmFylLIyiK2a8SIGHKTh4B3wLHT8U"
+ALLOWED_ORIGINS = "https://subasrivallivilashr-netizen.github.io,http://localhost:5500,http://127.0.0.1:5500"
+
+[[kv_namespaces]]
+binding = "CACHE"
+id = "191c10fe589c464d8454e36213b83d22"
+
+[[durable_objects.bindings]]
+name = "HUB"
+class_name = "Hub"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Hub"]

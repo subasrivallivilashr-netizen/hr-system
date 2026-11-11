@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Organisation</title><link rel="stylesheet" href="assets/app.css"></head>
+<body>
+<header class="top" id="top"></header>
+<main>
+  <section class="card">
+    <div style="display:flex;justify-content:space-between;align-items:start;gap:8px;flex-wrap:wrap">
+      <div><h2>Organisation structure</h2><p class="sub">Build top-down: Management → Store Manager → Sales and Non-sales teams. Headcount shows filled / approved.</p></div>
+      <button class="btn" id="addTop">+ Add top position</button>
+    </div>
+    <div class="toolbar">
+      <div id="storeBox"><label>View for store</label><select id="storeSel"></select></div>
+      <div><label>Search</label><input id="q" placeholder="Position name"></div>
+      <div><label>&nbsp;</label><label style="font-weight:400;margin:0"><input type="checkbox" id="showOff" style="width:auto"> Show inactive</label></div>
+      <div style="min-width:0"><label>&nbsp;</label><button id="expand">Expand all</button> <button id="collapse">Collapse all</button></div>
+    </div>
+    <div class="legend"><span><i style="background:var(--brand)"></i>Management</span><span><i style="background:#2e7d32"></i>Sales</span><span><i style="background:#b26a00"></i>Non-sales</span><span class="under">filled below approved</span></div>
+    <ul class="tree" id="tree"></ul>
+    <p class="sub" id="empty" class="hidden"></p>
+  </section>
+</main>
+
+<dialog id="dPos"><form method="dialog" id="fPos">
+  <h3 id="dPosT">Position</h3>
+  <div class="grid">
+    <div><label>Position name</label><input name="PositionName" required placeholder="e.g. Floor Manager"></div>
+    <div><label>Code <span style="font-weight:400;color:var(--muted)">(blank = auto)</span></label><input name="PositionCode"></div>
+    <div><label>Reports to</label><select name="ParentPositionCode" id="parentSel"></select></div>
+    <div><label>Branch</label><select name="Branch"><option>Management</option><option>Sales</option><option>Non-sales</option></select></div>
+    <div><label>Department</label><input name="Department" list="depts" placeholder="e.g. Sales, Billing"><datalist id="depts"></datalist></div>
+    <div><label>Applies to</label><select name="StoreCode" id="storeCodeSel"></select></div>
+    <div><label>Approved headcount <span style="font-weight:400;color:var(--muted)">(per store)</span></label><input name="ApprovedHeadcount" type="number" min="0" value="1"></div>
+    <div><label>Active</label><select name="Active"><option>Yes</option><option>No</option></select></div>
+  </div>
+  <div class="row-end"><span class="msg" id="m-pos"></span><button value="cancel" formnovalidate>Cancel</button><button class="btn" id="sPos">Save</button></div>
+</form></dialog>
+
+<script src="assets/app.js"></script>
+<script>
+const S = guard(['SuperAdmin', 'Admin', 'HR', 'Manager']);
+renderTop('org');
+const canEdit = S && ['SuperAdmin', 'Admin', 'HR'].includes(S.role);
+let D = null, collapsed = new Set();
+if (!canEdit) $('#addTop').classList.add('hidden');
+
+async function load() {
+  D = await api('getOrg');
+  const opts = D.stores.filter(s => s.Type !== 'Head Office' || true);
+  $('#storeSel').innerHTML = (D.sameStructure ? '<option value="ALL">All stores (common structure)</option>' : '<option value="ALL">Common positions only</option>') +
+    opts.map(s => `<option value="${esc(s.StoreCode)}">${esc(s.StoreCode)} · ${esc(s.StoreName)}</option>`).join('');
+  draw();
+}
+
+function visible(p, store) {
+  if (!$('#showOff').checked && p.Active === 'No') return false;
+  if (store === 'ALL') return true;
+  return p.StoreCode === 'ALL' || p.StoreCode === store;
+}
+
+function headcount(p, store) {
+  const approved = Number(p.ApprovedHeadcount || 0);
+  let filled = 0;
+  if (store === 'ALL') { Object.entries(D.filled).forEach(([k, v]) => { if (k.startsWith(p.PositionCode + '|')) filled += v; }); }
+  else filled = D.filled[p.PositionCode + '|' + store] || 0;
+  const storesCount = store === 'ALL' && p.StoreCode === 'ALL' ? Math.max(1, D.stores.filter(s => s.Type === 'Store').length) : 1;
+  const total = approved * storesCount;
+  return `<span class="hc ${filled < total ? 'under' : filled > total ? 'over' : ''}" title="Filled / approved">${filled} / ${total}</span>`;
+}
+
+function draw() {
+  const store = $('#storeSel').value, q = $('#q').value.trim().toLowerCase();
+  const list = D.positions.filter(p => visible(p, store));
+  const kids = code => list.filter(p => (p.ParentPositionCode || '') === code).sort((a, b) => (a.Branch > b.Branch ? 1 : -1) || a.PositionName.localeCompare(b.PositionName));
+  const matches = p => !q || p.PositionName.toLowerCase().includes(q) || kids(p.PositionCode).some(matches);
+  const node = p => {
+    if (!matches(p)) return '';
+    const ch = kids(p.PositionCode), open = !collapsed.has(p.PositionCode) || q;
+    return `<li><div class="node ${esc(p.Branch)} ${p.Active === 'No' ? 'off' : ''}">
+      <button class="tog" data-tog="${esc(p.PositionCode)}">${ch.length ? (open ? '▾' : '▸') : '•'}</button>
+      <div><div class="nm">${esc(p.PositionName)}</div><div class="meta">${esc(p.PositionCode)} · ${esc(p.Department || p.Branch)}${p.StoreCode !== 'ALL' ? ' · ' + esc(p.StoreCode) + ' only' : ''}</div></div>
+      ${headcount(p, store)}
+      ${canEdit ? `<span class="acts"><button data-add="${esc(p.PositionCode)}">+ Under</button><button data-edit="${esc(p.PositionCode)}">Edit</button></span>` : ''}
+    </div>${ch.length && open ? `<ul>${ch.map(node).join('')}</ul>` : ''}</li>`;
+  };
+  const roots = list.filter(p => !p.ParentPositionCode || !list.find(x => x.PositionCode === p.ParentPositionCode));
+  $('#tree').innerHTML = roots.map(node).join('');
+  $('#empty').textContent = list.length ? '' : 'No positions yet. Start with "+ Add top position" (e.g. Managing Director).';
+  document.querySelectorAll('[data-tog]').forEach(b => b.onclick = () => { const c = b.dataset.tog; collapsed.has(c) ? collapsed.delete(c) : collapsed.add(c); draw(); });
+  document.querySelectorAll('[data-add]').forEach(b => b.onclick = () => openPos(null, b.dataset.add));
+  document.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => openPos(D.positions.find(p => p.PositionCode === b.dataset.edit)));
+  if (!D.positions.length && canEdit) $('#addTop').classList.remove('hidden');
+}
+
+function openPos(p, parent) {
+  const f = $('#fPos');
+  const desc = new Set(); if (p) { const walk = c => D.positions.filter(x => x.ParentPositionCode === c).forEach(x => { desc.add(x.PositionCode); walk(x.PositionCode); }); walk(p.PositionCode); }
+  $('#parentSel').innerHTML = '<option value="">— None (top position) —</option>' + D.positions
+    .filter(x => x.Active !== 'No' && (!p || (x.PositionCode !== p.PositionCode && !desc.has(x.PositionCode))))
+    .sort((a, b) => a.Level - b.Level).map(x => `<option value="${esc(x.PositionCode)}">${'· '.repeat(Number(x.Level) - 1)}${esc(x.PositionName)}</option>`).join('');
+  $('#storeCodeSel').innerHTML = '<option value="ALL">All stores</option>' + D.stores.map(s => `<option value="${esc(s.StoreCode)}">${esc(s.StoreCode)} only</option>`).join('');
+  $('#depts').innerHTML = [...new Set(D.positions.map(x => x.Department).filter(Boolean))].map(d => `<option value="${esc(d)}">`).join('');
+  const parentPos = D.positions.find(x => x.PositionCode === parent);
+  fill(f, p || { ParentPositionCode: parent || '', Branch: parentPos ? (parentPos.Branch === 'Management' ? 'Sales' : parentPos.Branch) : 'Management', Department: parentPos ? parentPos.Department : '', StoreCode: parentPos ? parentPos.StoreCode : 'ALL', ApprovedHeadcount: 1, Active: 'Yes' });
+  f.PositionCode.readOnly = !!p;
+  $('#dPosT').textContent = p ? 'Edit position' : parentPos ? 'Add position under ' + parentPos.PositionName : 'Add top position';
+  $('#m-pos').textContent = '';
+  $('#dPos').showModal();
+}
+function fill(form, obj) { [...form.elements].forEach(el => { if (el.name) el.value = obj[el.name] ?? (el.tagName === 'SELECT' ? el.options[0].value : ''); }); }
+function read(form) { const o = {}; [...form.elements].forEach(el => { if (el.name) o[el.name] = el.value.trim(); }); return o; }
+
+$('#addTop').onclick = () => openPos(null, '');
+$('#sPos').onclick = async e => {
+  e.preventDefault(); const f = $('#fPos'); if (!f.reportValidity()) return;
+  const b = $('#sPos'); b.disabled = true;
+  try {
+    const x = read(f);
+    if (x.Active === 'No' && D.positions.find(p => p.PositionCode === x.PositionCode && p.Active !== 'No')) await api('deactivatePosition', { positionCode: x.PositionCode });
+    await api('savePosition', { position: x });
+    $('#dPos').close(); await load();
+  } catch (err) { showMsg($('#m-pos'), err.message); }
+  b.disabled = false;
+};
+['storeSel', 'showOff'].forEach(id => $('#' + id).addEventListener('change', draw));
+$('#q').addEventListener('input', draw);
+$('#expand').onclick = () => { collapsed.clear(); draw(); };
+$('#collapse').onclick = () => { D.positions.forEach(p => collapsed.add(p.PositionCode)); draw(); };
+
+if (S) load().catch(e => alert(e.message));
+</script></body></html>

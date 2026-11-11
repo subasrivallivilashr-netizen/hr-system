@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>HR System — Login</title><link rel="stylesheet" href="assets/app.css"></head>
+<body>
+<div class="login-wrap"><form class="login" id="f">
+  <h1>HR System</h1><p>Sign in to continue</p>
+  <label for="u">Username</label><input id="u" autocomplete="username" required>
+  <label for="p">Password</label><input id="p" type="password" autocomplete="current-password" required>
+  <button class="btn block" id="b">Sign in</button>
+  <div class="msg" id="m"></div>
+</form></div>
+<script src="assets/app.js"></script>
+<script>
+const HOME = { SuperAdmin: 'settings.html', Admin: 'settings.html', HR: 'settings.html', Manager: 'settings.html' };
+if (Session.get()) location.href = HOME[Session.get().role] || 'settings.html';
+$('#f').addEventListener('submit', async e => {
+  e.preventDefault(); const b = $('#b'); b.disabled = true; b.textContent = 'Signing in…';
+  try {
+    const d = await api('login', { username: $('#u').value, password: $('#p').value });
+    Session.set({ token: d.token, role: d.role, name: d.fullName, stores: d.stores, exp: Date.now() + 12 * 3600e3 });
+    location.href = HOME[d.role] || 'settings.html';
+  } catch (err) { showMsg($('#m'), err.message); b.disabled = false; b.textContent = 'Sign in'; }
+});
+</script></body></html>

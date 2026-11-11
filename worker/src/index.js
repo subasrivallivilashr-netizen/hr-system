@@ -179,6 +179,12 @@ export class Hub {
     this.cache.delete(module + '/' + tab);
   }
 
+  async log(module, recordId, action, remarks, doneBy) {
+    try {
+      await this.append('ActivityLog', 'Activity_Log', [{ Timestamp: new Date().toISOString(), Module: module, RecordId: recordId, Action: action, Remarks: remarks, DoneBy: doneBy }]);
+    } catch (e) { /* logging must never break the main action */ }
+  }
+
   // ── Sessions (signed tokens, no storage needed) ──
   async sessionKey() {
     if (!this._sKey) {
@@ -247,10 +253,106 @@ const ACTIONS = {
     }
   },
 
-  me: { auth: true, fn: async (p, user) => ({ username: user.u, role: user.r, fullName: user.n }) }
+  me: { auth: true, fn: async (p, user) => ({ username: user.u, role: user.r, fullName: user.n }) },
+
+  // ── Settings ──
+  getSettings: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN],
+    fn: async function () {
+      const company = {};
+      (await this.read('Settings', 'Company')).forEach(r => company[r.Key] = r.Value);
+      const stores = (await this.read('Settings', 'Stores')).map(clean);
+      const users = (await this.read('Settings', 'Users')).map(u => ({
+        Username: u.Username, Role: u.Role, FullName: u.FullName, StoreCodes: u.StoreCodes, Active: u.Active, CreatedAt: u.CreatedAt
+      }));
+      return { company, stores, users };
+    }
+  },
+
+  saveCompany: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN], write: true,
+    fn: async function (p, user) {
+      const allowed = ['CompanyName', 'EmpIdPrefix', 'EmpIdDigits', 'EmpIdNextNumber', 'EmpIdPerStore', 'SameStructureAllStores', 'ProbationDays'];
+      if (user.r === ROLES.SUPER) allowed.push('StoreLimit');
+      const rows = await this.read('Settings', 'Company');
+      for (const [k, v] of Object.entries(p.values || {})) {
+        if (!allowed.includes(k)) continue;
+        if (rows.find(r => r.Key === k)) await this.update('Settings', 'Company', 'Key', k, { Value: v });
+        else await this.append('Settings', 'Company', [{ Key: k, Value: v }]);
+      }
+      await this.log('Settings', 'Company', 'Updated', Object.keys(p.values || {}).join(', '), user.u);
+      return { message: 'Saved' };
+    }
+  },
+
+  saveStore: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN], write: true,
+    fn: async function (p, user) {
+      const s = p.store || {};
+      if (!s.StoreCode || !s.StoreName) throw new Error('Store code and name are required');
+      s.StoreCode = String(s.StoreCode).trim().toUpperCase();
+      const stores = await this.read('Settings', 'Stores');
+      const exists = stores.find(r => r.StoreCode === s.StoreCode);
+      if (exists) {
+        await this.update('Settings', 'Stores', 'StoreCode', s.StoreCode, s);
+      } else {
+        const company = {}; (await this.read('Settings', 'Company')).forEach(r => company[r.Key] = r.Value);
+        const limit = Number(company.StoreLimit || 0);
+        const activeStores = stores.filter(r => r.Type === 'Store' && r.Active !== 'No').length;
+        if (s.Type === 'Store' && limit && activeStores >= limit) throw new Error(`Store limit reached (${limit}). Contact your Super Admin to increase it.`);
+        await this.append('Settings', 'Stores', [{ Active: 'Yes', UsesCommonStructure: 'Yes', ...s }]);
+      }
+      await this.log('Settings', s.StoreCode, exists ? 'Store updated' : 'Store added', s.StoreName, user.u);
+      return { message: 'Saved' };
+    }
+  },
+
+  saveUser: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN], write: true,
+    fn: async function (p, user) {
+      const u = p.user || {};
+      const username = String(u.Username || '').trim().toLowerCase();
+      if (!username) throw new Error('Username is required');
+      const validRoles = user.r === ROLES.SUPER ? Object.values(ROLES) : [ROLES.ADMIN, ROLES.HR, ROLES.MANAGER];
+      if (u.Role && !validRoles.includes(u.Role)) throw new Error('You cannot assign the role ' + u.Role);
+      const users = await this.read('Settings', 'Users');
+      const exists = users.find(x => String(x.Username).toLowerCase() === username);
+      if (exists && exists.Role === ROLES.SUPER && user.r !== ROLES.SUPER) throw new Error('Only a Super Admin can change a Super Admin');
+      const changes = { FullName: u.FullName, Role: u.Role, StoreCodes: u.StoreCodes, Active: u.Active };
+      Object.keys(changes).forEach(k => changes[k] === undefined && delete changes[k]);
+      if (u.Password) {
+        if (u.Password.length < 8) throw new Error('Password must be at least 8 characters');
+        const { hash, salt } = await hashPassword(u.Password);
+        changes.PasswordHash = hash; changes.Salt = salt;
+      }
+      if (exists) {
+        await this.update('Settings', 'Users', 'Username', exists.Username, changes);
+      } else {
+        if (!u.Password) throw new Error('Password is required for a new user');
+        await this.append('Settings', 'Users', [{ Username: username, Active: 'Yes', StoreCodes: 'ALL', CreatedAt: new Date().toISOString(), ...changes }]);
+      }
+      await this.log('Settings', username, exists ? 'User updated' : 'User added', u.Role || '', user.u);
+      return { message: 'Saved' };
+    }
+  },
+
+  changeMyPassword: {
+    auth: true, write: true,
+    fn: async function (p, user) {
+      const users = await this.read('Settings', 'Users');
+      const me = users.find(x => x.Username === user.u);
+      if (!me || !(await checkPassword(p.oldPassword || '', me.Salt, me.PasswordHash))) throw new Error('Current password is wrong');
+      if (!p.newPassword || p.newPassword.length < 8) throw new Error('New password must be at least 8 characters');
+      const { hash, salt } = await hashPassword(p.newPassword);
+      await this.update('Settings', 'Users', 'Username', user.u, { PasswordHash: hash, Salt: salt });
+      return { message: 'Password changed' };
+    }
+  }
 };
 
+
 // ───────────────────────── Helpers ─────────────────────────
+function clean(r) { const o = { ...r }; delete o._row; return o; }
 function json(obj, status = 200) {
   return new Response(JSON.stringify(obj), { status, headers: { 'Content-Type': 'application/json' } });
 }

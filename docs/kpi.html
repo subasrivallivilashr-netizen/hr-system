@@ -8,8 +8,8 @@
   <div class="tabs" id="tabs">
     <button data-t="params" class="on">KPI parameters</button>
     <button data-t="bands">Rating bands</button>
-    <button data-t="soon" title="Part 2">Monthly entry</button>
-    <button data-t="soon" title="Part 2">Approval</button>
+    <button data-t="entry">Monthly entry</button>
+    <button data-t="approve" id="apTab">Approval</button>
     <button data-t="soon" title="Part 3">Reports</button>
   </div>
 
@@ -31,6 +31,39 @@
     <table><thead><tr><th>Band</th><th>Min score</th><th>Max score</th><th>Meaning</th><th></th></tr></thead><tbody id="bandRows"></tbody></table>
     <div class="row-end"><button id="addBand">+ Add band</button><span class="msg" id="m-b"></span><button class="btn" id="saveBands">Save</button></div>
   </section>
+
+  <section id="t-entry" class="hidden">
+    <section class="card">
+      <div class="filters">
+        <div><label>Month</label><input type="month" id="month"></div>
+        <div><label>Store</label><select id="eStore"></select></div>
+        <div><label>Status</label><select id="eStat"><option value="">All</option><option>Not started</option><option>Draft</option><option>Returned</option><option>Submitted</option><option>Approved</option></select></div>
+        <div><label>Search</label><input id="eq" placeholder="Name or ID"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center">
+        <p class="sub" id="eInfo" style="margin:0"></p>
+        <div style="display:flex;gap:6px;flex-wrap:wrap"><button id="dlTeam">Download team sheet</button><button id="ulTeam">Upload team sheet</button><input type="file" id="tfile" accept=".xlsx,.xls" class="hidden"><button class="btn" id="subAll">Submit all complete</button></div>
+      </div>
+    </section>
+    <section class="card"><div class="tbl-wrap"><table><thead><tr><th>Employee</th><th>Position</th><th>Store</th><th>Score</th><th>Band</th><th>Status</th></tr></thead><tbody id="eRows"></tbody></table></div></section>
+  </section>
+
+  <section id="t-approve" class="card hidden">
+    <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:start">
+      <div><h2>Approval — <span id="apMonth"></span></h2><p class="sub" id="apInfo"></p></div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap"><button id="lockBtn"></button></div>
+    </div>
+    <div class="tbl-wrap"><table><thead><tr><th><input type="checkbox" id="apAll" style="width:auto"></th><th>Employee</th><th>Position</th><th>Store</th><th>Manager</th><th>Score</th><th>Band</th><th>Remarks</th></tr></thead><tbody id="apRows"></tbody></table></div>
+    <div class="row-end"><span class="msg" id="m-ap"></span><button id="retSel">Return selected</button><button class="btn" id="okSel">Approve selected</button></div>
+  </section>
+
+  <dialog id="dE" style="width:min(760px,95vw)"><form method="dialog" id="fE">
+    <h3 id="dET"></h3><p class="sub" id="dES"></p>
+    <div class="tbl-wrap"><table><thead><tr><th>KPI</th><th>Target</th><th style="width:130px">Actual</th><th>Achievement</th><th>Weight</th><th>Score</th></tr></thead><tbody id="eKpis"></tbody>
+    <tfoot><tr><th colspan="5" style="text-align:right">Total score</th><th id="eTot">—</th></tr></tfoot></table></div>
+    <label>Remarks</label><input id="eRem" placeholder="Optional comments for HR">
+    <div class="row-end"><span class="msg" id="m-e"></span><button value="cancel" formnovalidate>Close</button><button id="eSave">Save draft</button><button class="btn" id="eSub">Submit to HR</button></div>
+  </form></dialog>
 
   <section id="t-soon" class="card hidden"><h2>Coming next</h2><p class="sub">Monthly entry, approval and reports are being built in the next parts.</p></section>
 </main>
@@ -65,7 +98,8 @@ const total = c => kpisOf(c).reduce((a, k) => a + Number(k.WeightPct || 0), 0);
 
 document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => {
   document.querySelectorAll('#tabs button').forEach(x => x.classList.toggle('on', x === b));
-  ['params', 'bands', 'soon'].forEach(t => $('#t-' + t).classList.toggle('hidden', t !== b.dataset.t));
+  ['params', 'bands', 'soon', 'entry', 'approve'].forEach(t => $('#t-' + t).classList.toggle('hidden', t !== b.dataset.t));
+  if (b.dataset.t === 'entry' || b.dataset.t === 'approve') loadMonth();
 });
 
 async function load() { D = await api('getKpiSetup'); list(); bands(); if (cur) show(cur); }
@@ -153,6 +187,150 @@ $('#file').onchange = async () => {
   const rows = aoa.slice(h + 1).map(r => { const o = {}; idx.forEach(([k, i]) => o[k] = i >= 0 ? String(r[i]).trim() : ''); return o; }).filter(o => o.PositionCode && o.KpiName);
   if (!confirm(`Import ${rows.length} KPIs? Positions in the file will have their KPIs replaced.`)) return;
   try { const r = await api('importKpiParams', { rows }); alert(r.message); await load(); } catch (e) { alert(e.message); }
+};
+
+
+// ───── Monthly entry & approval ─────
+const isHR = S && ['SuperAdmin', 'Admin', 'HR'].includes(S.role);
+const isAdmin = S && ['SuperAdmin', 'Admin'].includes(S.role);
+if (!isHR) $('#apTab').classList.add('hidden');
+let M = null, curEmp = null;
+(() => { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1); $('#month').value = d.toISOString().slice(0, 7); })();
+$('#month').addEventListener('change', loadMonth);
+['eStore', 'eStat'].forEach(i => $('#' + i).addEventListener('change', drawEntry));
+$('#eq').addEventListener('input', drawEntry);
+
+function score(k, actual) {
+  if (actual === '' || actual === null || actual === undefined || isNaN(actual)) return { ach: '', score: '' };
+  const a = Number(actual), t = Number(k.Target), cap = Number(k.ScoreCapPct || 100); let ach;
+  if (k.Direction === 'Lower is better') ach = t > 0 ? (a <= t ? 100 : t / a * 100) : [100, 70, 40, 0][Math.min(Math.max(Math.round(a), 0), 3)];
+  else ach = t > 0 ? a / t * 100 : (a > 0 ? 100 : 0);
+  ach = Math.max(0, Math.min(ach, cap));
+  return { ach: Math.round(ach * 100) / 100, score: Math.round(ach * k.WeightPct) / 100 };
+}
+const bandOf = t => ([...M.bands].sort((a, b) => b.MinScore - a.MinScore).find(b => t >= Number(b.MinScore)) || {}).Band || '';
+const pName = c => (M.positions.find(p => p.PositionCode === c) || {}).PositionName || c;
+const eName = id => (M.employees.find(e => e.EmpId === id) || {}).FullName || id || '';
+const sumOf = id => M.summaries.find(x => x.EmpId === id);
+const statusOf = id => (sumOf(id) || {}).Status || 'Not started';
+const kpisFor = e => D.params.filter(k => k.PositionCode === e.PositionCode);
+const locked = () => M && M.cycle.Status === 'Locked';
+const pillCls = s => s === 'Approved' ? 'yes' : s === 'Returned' ? 'no' : '';
+
+async function loadMonth() {
+  try { M = await api('getKpiMonth', { month: $('#month').value }); } catch (e) { alert(e.message); return; }
+  const stores = [...new Set(M.employees.map(e => e.StoreCode))].sort();
+  const keep = $('#eStore').value;
+  $('#eStore').innerHTML = '<option value="">All</option>' + stores.map(s => `<option>${esc(s)}</option>`).join(''); $('#eStore').value = keep;
+  drawEntry(); drawApprove();
+}
+
+function drawEntry() {
+  const st = $('#eStore').value, ss = $('#eStat').value, q = $('#eq').value.trim().toLowerCase();
+  const list = M.employees.filter(e => (!st || e.StoreCode === st) && (!ss || statusOf(e.EmpId) === ss) && (!q || (e.FullName + ' ' + e.EmpId).toLowerCase().includes(q)));
+  const counts = {}; M.employees.forEach(e => { const s = statusOf(e.EmpId); counts[s] = (counts[s] || 0) + 1; });
+  $('#eInfo').innerHTML = `${M.employees.length} in ${S.role === 'Manager' ? 'your team' : 'scope'} · ` + ['Not started', 'Draft', 'Returned', 'Submitted', 'Approved'].filter(s => counts[s]).map(s => `${s}: <b>${counts[s]}</b>`).join(' · ') + (locked() ? ' · <span class="pill no">Month locked</span>' : '');
+  $('#eRows').innerHTML = list.map(e => { const sm = sumOf(e.EmpId) || {}; const s = statusOf(e.EmpId);
+    return `<tr class="click" data-id="${esc(e.EmpId)}"><td><b>${esc(e.FullName)}</b><div class="sub" style="margin:0;font-size:12px">${esc(e.EmpId)}</div></td><td>${esc(pName(e.PositionCode))}</td><td>${esc(e.StoreCode)}</td><td>${sm.TotalScore !== undefined && sm.TotalScore !== '' ? esc(sm.TotalScore) : '—'}</td><td>${esc(sm.Band || '—')}</td><td><span class="pill ${pillCls(s)}">${esc(s)}</span></td></tr>`; }).join('')
+    || `<tr><td colspan="6" style="color:var(--muted)">${S.role === 'Manager' ? 'No one reports to you, or your login is not linked to your employee record.' : 'No employees.'}</td></tr>`;
+  document.querySelectorAll('#eRows tr.click').forEach(r => r.onclick = () => openEntry(r.dataset.id));
+  $('#subAll').disabled = $('#ulTeam').disabled = locked();
+}
+
+function openEntry(id) {
+  const e = M.employees.find(x => x.EmpId === id); curEmp = e;
+  const ks = kpisFor(e), sm = sumOf(id) || {}, st = statusOf(id);
+  const ro = locked() || st === 'Approved' || (st === 'Submitted' && !isHR);
+  $('#dET').textContent = `${e.FullName} — ${M.month}`;
+  $('#dES').innerHTML = `${esc(pName(e.PositionCode))} · ${esc(e.StoreCode)} · <span class="pill ${pillCls(st)}">${esc(st)}</span>` + (ks.length ? '' : ' · <span class="under">No KPIs set for this position</span>');
+  $('#eKpis').innerHTML = ks.map((k, i) => {
+    const en = M.entries.find(x => x.EmpId === id && x.KpiName === k.KpiName) || {};
+    const lockedField = ro || (k.EnteredBy === 'HR' && !isHR);
+    return `<tr><td><b>${esc(k.KpiName)}</b><div class="sub" style="margin:0;font-size:12px">${k.Direction === 'Lower is better' ? '↓ lower is better' : '↑ higher is better'}${k.EnteredBy === 'HR' ? ' · entered by HR' : ''}</div></td>
+      <td>${esc(k.Target)} ${esc(k.Unit)}</td><td><input type="number" step="any" class="act" data-i="${i}" value="${esc(en.Actual ?? '')}" ${lockedField ? 'disabled' : ''}></td>
+      <td class="ach"></td><td>${esc(k.WeightPct)}%</td><td class="sc"></td></tr>`; }).join('');
+  $('#eRem').value = sm.ManagerRemarks || ''; $('#eRem').disabled = ro;
+  $('#eSave').classList.toggle('hidden', ro); $('#eSub').classList.toggle('hidden', ro || st === 'Submitted');
+  $('#m-e').textContent = '';
+  const recalc = () => { let tot = 0, all = true;
+    document.querySelectorAll('#eKpis tr').forEach((tr, i) => { const v = tr.querySelector('.act').value; const r = score(ks[i], v === '' ? '' : Number(v));
+      tr.querySelector('.ach').textContent = r.ach === '' ? '—' : r.ach + '%'; tr.querySelector('.sc').textContent = r.score === '' ? '—' : r.score; if (r.score === '') all = false; else tot += r.score; });
+    $('#eTot').textContent = all && ks.length ? `${Math.round(tot * 100) / 100} (${bandOf(tot)})` : '—'; };
+  document.querySelectorAll('.act').forEach(x => x.addEventListener('input', recalc)); recalc();
+  $('#dE').showModal();
+}
+async function saveOne(submit) {
+  const ks = kpisFor(curEmp), actuals = {};
+  document.querySelectorAll('#eKpis .act').forEach((x, i) => { if (!x.disabled) actuals[ks[i].KpiName] = x.value; });
+  try {
+    const r = await api('saveKpiEntries', { month: M.month, submit, items: [{ EmpId: curEmp.EmpId, actuals, remarks: $('#eRem').value }] });
+    if (r.errors && r.errors.length) return showMsg($('#m-e'), r.errors.join('; '));
+    $('#dE').close(); await loadMonth();
+  } catch (err) { showMsg($('#m-e'), err.message); }
+}
+$('#eSave').onclick = ev => { ev.preventDefault(); saveOne(false); };
+$('#eSub').onclick = ev => { ev.preventDefault(); saveOne(true); };
+
+$('#subAll').onclick = async () => {
+  const ready = M.employees.filter(e => ['Draft', 'Returned'].includes(statusOf(e.EmpId)));
+  if (!ready.length) return alert('Nothing in Draft to submit.');
+  if (!confirm(`Submit ${ready.length} employees to HR? Only those with all KPIs filled will go.`)) return;
+  try { const r = await api('saveKpiEntries', { month: M.month, submit: true, items: ready.map(e => ({ EmpId: e.EmpId })) }); alert(r.message + (r.errors.length ? '\n\n' + r.errors.join('\n') : '')); await loadMonth(); } catch (e) { alert(e.message); }
+};
+
+// Team sheet: one row per employee x KPI
+$('#dlTeam').onclick = () => {
+  const rows = [['Employee ID', 'Name', 'Position', 'Store', 'KPI', 'Target', 'Unit', 'Direction', 'Entered By', 'Actual']];
+  M.employees.forEach(e => kpisFor(e).forEach(k => { const en = M.entries.find(x => x.EmpId === e.EmpId && x.KpiName === k.KpiName) || {};
+    rows.push([e.EmpId, e.FullName, pName(e.PositionCode), e.StoreCode, k.KpiName, k.Target, k.Unit, k.Direction, k.EnteredBy, en.Actual ?? '']); }));
+  const wb = XLSX.utils.book_new(); const ws = XLSX.utils.aoa_to_sheet(rows); ws['!cols'] = rows[0].map((h, i) => ({ wch: i === 4 ? 30 : 14 }));
+  XLSX.utils.book_append_sheet(wb, ws, 'KPI ' + M.month);
+  XLSX.writeFile(wb, `KPI_${M.month}_${S.role === 'Manager' ? 'MyTeam' : 'All'}.xlsx`);
+};
+$('#ulTeam').onclick = () => $('#tfile').click();
+$('#tfile').onchange = async () => {
+  const f = $('#tfile').files[0]; if (!f) return; $('#tfile').value = '';
+  const wb = XLSX.read(await f.arrayBuffer());
+  const aoa = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: '' });
+  const h = aoa[0].map(x => String(x).trim().toLowerCase()), iE = h.indexOf('employee id'), iK = h.indexOf('kpi'), iA = h.indexOf('actual');
+  if (iE < 0 || iK < 0 || iA < 0) return alert('Use the downloaded team sheet (columns Employee ID, KPI, Actual).');
+  const by = {}; aoa.slice(1).forEach(r => { if (!r[iE] || r[iA] === '') return; (by[r[iE]] = by[r[iE]] || {})[String(r[iK]).trim()] = r[iA]; });
+  const items = Object.entries(by).map(([EmpId, actuals]) => ({ EmpId, actuals }));
+  if (!items.length) return alert('No actual values found in the file.');
+  if (!confirm(`Save figures for ${items.length} employees as draft?`)) return;
+  try { const r = await api('saveKpiEntries', { month: M.month, submit: false, items }); alert(r.message + (r.errors.length ? '\n\n' + r.errors.join('\n') : '')); await loadMonth(); } catch (e) { alert(e.message); }
+};
+
+// Approval
+function drawApprove() {
+  if (!isHR) return;
+  $('#apMonth').textContent = M.month;
+  const sub = M.employees.filter(e => statusOf(e.EmpId) === 'Submitted');
+  const appr = M.employees.filter(e => statusOf(e.EmpId) === 'Approved').length;
+  $('#apInfo').innerHTML = `Waiting: <b>${sub.length}</b> · Approved: <b>${appr}</b> of ${M.employees.length}` + (locked() ? ' · <span class="pill no">Locked</span>' : '');
+  $('#apRows').innerHTML = sub.map(e => { const sm = sumOf(e.EmpId);
+    return `<tr><td><input type="checkbox" class="apc" value="${esc(e.EmpId)}" style="width:auto"></td><td class="click" data-id="${esc(e.EmpId)}"><b>${esc(e.FullName)}</b></td><td>${esc(pName(e.PositionCode))}</td><td>${esc(e.StoreCode)}</td><td>${esc(eName(e.ReportingManagerId))}</td><td>${sm.TotalScore === '' ? '<span class="under">HR fields empty</span>' : esc(sm.TotalScore)}</td><td>${esc(sm.Band)}</td><td>${esc(sm.ManagerRemarks)}</td></tr>`; }).join('')
+    || '<tr><td colspan="8" style="color:var(--muted)">Nothing waiting for approval.</td></tr>';
+  document.querySelectorAll('#apRows td.click').forEach(td => td.onclick = () => openEntry(td.dataset.id));
+  $('#apAll').checked = false;
+  const lk = locked();
+  $('#lockBtn').textContent = lk ? 'Unlock month' : 'Lock month';
+  $('#lockBtn').classList.toggle('hidden', lk && !isAdmin);
+  $('#okSel').disabled = $('#retSel').disabled = lk;
+}
+$('#apAll').onchange = () => document.querySelectorAll('.apc').forEach(c => c.checked = $('#apAll').checked);
+const picked = () => [...document.querySelectorAll('.apc:checked')].map(c => c.value);
+$('#okSel').onclick = async () => { const ids = picked(); if (!ids.length) return alert('Tick employees first.');
+  try { const r = await api('approveKpi', { month: M.month, action: 'approve', empIds: ids }); showMsg($('#m-ap'), r.message + (r.errors.length ? ' — ' + r.errors.join('; ') : ''), !r.errors.length); await loadMonth(); } catch (e) { showMsg($('#m-ap'), e.message); } };
+$('#retSel').onclick = async () => { const ids = picked(); if (!ids.length) return alert('Tick employees first.');
+  const remarks = prompt('Reason for returning (the manager will see this):'); if (remarks === null) return;
+  try { const r = await api('approveKpi', { month: M.month, action: 'return', empIds: ids, remarks }); showMsg($('#m-ap'), r.message, true); await loadMonth(); } catch (e) { showMsg($('#m-ap'), e.message); } };
+$('#lockBtn').onclick = async () => {
+  const lk = locked(); let reason = '';
+  if (lk) { reason = prompt('Reason for unlocking ' + M.month + ':'); if (!reason) return; }
+  else { const pending = M.employees.length - M.employees.filter(e => statusOf(e.EmpId) === 'Approved').length;
+    if (!confirm(`Lock ${M.month}?` + (pending ? `\n${pending} employees are not approved yet and will stay unapproved.` : '') + '\nNo one can change figures after locking.')) return; }
+  try { await api('setKpiCycle', { month: M.month, status: lk ? 'Open' : 'Locked', reason }); await loadMonth(); } catch (e) { alert(e.message); }
 };
 
 if (S) load().catch(e => alert(e.message));

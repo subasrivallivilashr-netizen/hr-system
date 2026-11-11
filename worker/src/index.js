@@ -124,6 +124,7 @@ export class Hub {
     if (reg[module]) return reg[module];
     const yearly = module + '_' + new Date().getFullYear();
     if (reg[yearly]) return reg[yearly];
+    if (/_\d{4}$/.test(module)) throw new Error(`The ${module.replace('_', ' ')} spreadsheet does not exist yet. Run the setup script for that year.`);
     throw new Error('Spreadsheet not found in Registry: ' + module);
   }
 
@@ -250,6 +251,44 @@ export class Hub {
     await this.gfetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}/values/${encodeURIComponent(tab)}!${start}1?valueInputOption=RAW`,
       { method: 'PUT', body: JSON.stringify({ values: [missing] }) });
     this.headCache.set(module + '/' + tab, head.concat(missing));
+    this.cache.delete(module + '/' + tab);
+  }
+
+  // Team in scope for this user + KPI setup for a month
+  async kpiContext(month, user) {
+    const emps = await this.read('Organisation', 'Employees');
+    const monthEnd = month + '-31';
+    let employees = emps.filter(e => e.Status !== 'Exited' && (!e.JoiningDate || e.JoiningDate <= monthEnd));
+    if (user.r === ROLES.MANAGER) {
+      if (!user.e) throw new Error('Your login is not linked to an employee. Ask Admin to link it in Settings → Users.');
+      employees = employees.filter(e => e.ReportingManagerId === user.e);
+    }
+    employees = employees.map(e => ({ EmpId: e.EmpId, FullName: e.FullName, PositionCode: e.PositionCode, StoreCode: e.StoreCode, ReportingManagerId: e.ReportingManagerId, JoiningDate: e.JoiningDate }));
+    const params = (await this.read('Performance', 'KPI_Parameters')).map(clean).filter(k => k.Active !== 'No');
+    let bands = (await this.read('Performance', 'Rating_Bands')).map(clean); if (!bands.length) bands = DEFAULT_BANDS;
+    const cycle = (await this.read('Performance', 'KPI_Cycles')).find(c => c.Month === month) || { Month: month, Status: 'Open' };
+    const positions = (await this.read('Organisation', 'Positions')).map(p => ({ PositionCode: p.PositionCode, PositionName: p.PositionName }));
+    return { employees, team: new Set(employees.map(e => e.EmpId)), params, bands, cycle: clean(cycle), positions };
+  }
+
+  // Update rows whose key matches, append the rest — 2-3 Google calls whatever the size
+  async upsertMany(module, tab, keyCols, objs) {
+    this.cache.delete(module + '/' + tab);
+    const rows = await this.read(module, tab);
+    const head = await this.headers(module, tab);
+    const key = o => keyCols.map(k => String(o[k])).join('|');
+    const at = new Map(rows.map(r => [key(r), r._row]));
+    const id = await this.ssId(module);
+    const data = [], fresh = [];
+    objs.forEach(o => {
+      const vals = head.map(h => o[h] === undefined ? '' : o[h]);
+      const r = at.get(key(o));
+      if (r) data.push({ range: `${tab}!A${r}`, values: [vals] }); else fresh.push(vals);
+    });
+    if (data.length) await this.gfetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}/values:batchUpdate`,
+      { method: 'POST', body: JSON.stringify({ valueInputOption: 'RAW', data }) });
+    if (fresh.length) await this.gfetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}/values/${encodeURIComponent(tab)}!A1:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,
+      { method: 'POST', body: JSON.stringify({ values: fresh }) });
     this.cache.delete(module + '/' + tab);
   }
 
@@ -683,6 +722,112 @@ const ACTIONS = {
     }
   },
 
+  // ── KPI monthly cycle ──
+  getKpiMonth: {
+    auth: true,
+    fn: async function (p, user) {
+      const month = checkMonth(p.month), ss = 'KPI_' + month.slice(0, 4);
+      const ctx = await this.kpiContext(month, user);
+      const entries = (await this.read(ss, 'KPI_Entries')).filter(e => e.Month === month && ctx.team.has(e.EmpId)).map(clean);
+      const summaries = (await this.read(ss, 'KPI_Summary')).filter(e => e.Month === month && ctx.team.has(e.EmpId)).map(clean);
+      return { month, cycle: ctx.cycle, employees: ctx.employees, params: ctx.params, bands: ctx.bands, entries, summaries, positions: ctx.positions };
+    }
+  },
+
+  saveKpiEntries: {
+    auth: true, write: true,
+    fn: async function (p, user) {
+      const month = checkMonth(p.month), ss = 'KPI_' + month.slice(0, 4);
+      const ctx = await this.kpiContext(month, user);
+      if (ctx.cycle.Status === 'Locked') throw new Error(`${month} is locked. Ask an Admin to unlock it.`);
+      const isHR = [ROLES.SUPER, ROLES.ADMIN, ROLES.HR].includes(user.r);
+      const oldEntries = (await this.read(ss, 'KPI_Entries')).filter(e => e.Month === month);
+      const oldSums = (await this.read(ss, 'KPI_Summary')).filter(e => e.Month === month);
+      const now = new Date().toISOString(), entryRows = [], sumRows = [], errors = [];
+      for (const item of p.items || []) {
+        const emp = ctx.employees.find(e => e.EmpId === item.EmpId);
+        if (!emp) { errors.push(`${item.EmpId}: not in your team`); continue; }
+        const prev = oldSums.find(x => x.EmpId === emp.EmpId);
+        if (prev && prev.Status === 'Approved') { errors.push(`${emp.FullName}: already approved`); continue; }
+        if (prev && prev.Status === 'Submitted' && !isHR) { errors.push(`${emp.FullName}: already submitted to HR`); continue; }
+        const kpis = ctx.params.filter(k => k.PositionCode === emp.PositionCode);
+        if (!kpis.length) { errors.push(`${emp.FullName}: no KPIs set for this position`); continue; }
+        const rows = kpis.map(k => {
+          const old = oldEntries.find(e => e.EmpId === emp.EmpId && e.KpiName === k.KpiName) || {};
+          const mayEdit = isHR || k.EnteredBy !== 'HR';
+          const given = item.actuals && Object.prototype.hasOwnProperty.call(item.actuals, k.KpiName) ? item.actuals[k.KpiName] : undefined;
+          let actual = old.Actual === undefined ? '' : old.Actual;
+          if (mayEdit && given !== undefined) actual = given === '' || given === null ? '' : Number(given);
+          if (actual !== '' && isNaN(actual)) throw new Error(`${emp.FullName} – ${k.KpiName}: actual must be a number`);
+          const sc = kpiScore(k, actual);
+          return { Month: month, EmpId: emp.EmpId, PositionCode: emp.PositionCode, KpiName: k.KpiName, Target: Number(k.Target), Actual: actual,
+            AchievementPct: sc.ach, WeightPct: Number(k.WeightPct), Score: sc.score,
+            EnteredBy: actual === old.Actual ? (old.EnteredBy || '') : user.u, EnteredAt: actual === old.Actual ? (old.EnteredAt || '') : now };
+        });
+        const filled = rows.every(r => r.Actual !== '');
+        const mgrFilled = rows.every((r, i) => r.Actual !== '' || kpis[i].EnteredBy === 'HR');
+        const total = round2(rows.reduce((a, r) => a + (r.Score || 0), 0));
+        let status = prev ? prev.Status : 'Draft';
+        if (status === 'Returned') status = 'Draft';
+        if (p.submit && status === 'Draft') {
+          if (!mgrFilled) { errors.push(`${emp.FullName}: fill all KPIs before submitting`); }
+          else status = 'Submitted';
+        }
+        entryRows.push(...rows);
+        sumRows.push({ Month: month, EmpId: emp.EmpId, StoreCode: emp.StoreCode, TotalScore: filled ? total : '', Band: filled ? bandOf(total, ctx.bands) : '',
+          ManagerRemarks: item.remarks !== undefined ? item.remarks : (prev ? prev.ManagerRemarks : ''), Status: status,
+          SubmittedBy: status === 'Submitted' && (!prev || prev.Status !== 'Submitted') ? user.u : (prev ? prev.SubmittedBy : ''),
+          SubmittedAt: status === 'Submitted' && (!prev || prev.Status !== 'Submitted') ? now : (prev ? prev.SubmittedAt : ''),
+          ApprovedBy: '', ApprovedAt: '' });
+      }
+      if (entryRows.length) {
+        await this.upsertMany(ss, 'KPI_Entries', ['Month', 'EmpId', 'KpiName'], entryRows);
+        await this.upsertMany(ss, 'KPI_Summary', ['Month', 'EmpId'], sumRows);
+        await this.log('Performance', month, p.submit ? 'KPIs submitted' : 'KPIs saved', `${sumRows.length} employees`, user.u);
+      }
+      return { message: `${sumRows.length} saved` + (errors.length ? `, ${errors.length} skipped` : ''), errors };
+    }
+  },
+
+  approveKpi: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR], write: true,
+    fn: async function (p, user) {
+      const month = checkMonth(p.month), ss = 'KPI_' + month.slice(0, 4);
+      const ctx = await this.kpiContext(month, user);
+      if (ctx.cycle.Status === 'Locked') throw new Error(`${month} is locked.`);
+      const sums = (await this.read(ss, 'KPI_Summary')).filter(e => e.Month === month);
+      const now = new Date().toISOString(), out = [], errors = [];
+      for (const id of p.empIds || []) {
+        const sm = sums.find(x => x.EmpId === id);
+        if (!sm || sm.Status !== 'Submitted') { errors.push(`${id}: not submitted`); continue; }
+        if (p.action === 'approve') {
+          if (sm.TotalScore === '' || sm.TotalScore === undefined) { errors.push(`${id}: some KPIs are still empty (HR fields?)`); continue; }
+          out.push({ ...clean(sm), Status: 'Approved', ApprovedBy: user.u, ApprovedAt: now });
+        } else {
+          out.push({ ...clean(sm), Status: 'Returned', ManagerRemarks: (p.remarks ? 'HR: ' + p.remarks + ' | ' : '') + (sm.ManagerRemarks || '') });
+        }
+      }
+      if (out.length) {
+        await this.upsertMany(ss, 'KPI_Summary', ['Month', 'EmpId'], out);
+        await this.log('Performance', month, p.action === 'approve' ? 'KPIs approved' : 'KPIs returned', `${out.length} employees`, user.u);
+      }
+      return { message: `${out.length} ${p.action === 'approve' ? 'approved' : 'returned'}` + (errors.length ? `, ${errors.length} skipped` : ''), errors };
+    }
+  },
+
+  setKpiCycle: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR], write: true,
+    fn: async function (p, user) {
+      const month = checkMonth(p.month);
+      if (p.status === 'Open' && ![ROLES.SUPER, ROLES.ADMIN].includes(user.r)) throw new Error('Only an Admin can unlock a month');
+      if (p.status === 'Open' && !p.reason) throw new Error('Give a reason for unlocking');
+      const now = new Date().toISOString();
+      await this.upsertMany('Performance', 'KPI_Cycles', ['Month'], [{ Month: month, Status: p.status, OpenedAt: now, LockedAt: p.status === 'Locked' ? now : '', LockedBy: p.status === 'Locked' ? user.u : '' }]);
+      await this.log('Performance', month, p.status === 'Locked' ? 'Month locked' : 'Month unlocked', p.reason || '', user.u);
+      return { message: `${month} ${p.status === 'Locked' ? 'locked' : 'unlocked'}` };
+    }
+  },
+
   changeMyPassword: {
     auth: true, write: true,
     fn: async function (p, user) {
@@ -699,6 +844,25 @@ const ACTIONS = {
 
 
 // ───────────────────────── Helpers ─────────────────────────
+function checkMonth(m) { if (!/^\d{4}-\d{2}$/.test(m || '')) throw new Error('Month must look like 2026-10'); return m; }
+function round2(n) { return Math.round(n * 100) / 100; }
+// Achievement % (capped) and weighted score for one KPI
+function kpiScore(k, actual) {
+  if (actual === '' || actual === null || actual === undefined) return { ach: '', score: '' };
+  const a = Number(actual), t = Number(k.Target), cap = Number(k.ScoreCapPct || 100);
+  let ach;
+  if (k.Direction === 'Lower is better') {
+    if (t > 0) ach = a <= t ? 100 : (t / a) * 100;
+    else ach = [100, 70, 40, 0][Math.min(Math.max(Math.round(a), 0), 3)];
+  } else ach = t > 0 ? (a / t) * 100 : (a > 0 ? 100 : 0);
+  ach = Math.max(0, Math.min(ach, cap));
+  return { ach: round2(ach), score: round2(ach * Number(k.WeightPct) / 100) };
+}
+function bandOf(total, bands) {
+  const b = [...bands].sort((x, y) => Number(y.MinScore) - Number(x.MinScore)).find(x => total >= Number(x.MinScore));
+  return b ? b.Band : '';
+}
+
 const DEFAULT_BANDS = [
   { Band: 'A', MinScore: 90, MaxScore: 999, Meaning: 'Outstanding' },
   { Band: 'B', MinScore: 75, MaxScore: 89.99, Meaning: 'Good' },

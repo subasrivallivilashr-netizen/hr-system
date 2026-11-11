@@ -80,7 +80,7 @@ function draw() {
       <button class="tog" data-tog="${esc(p.PositionCode)}">${ch.length ? (open ? '▾' : '▸') : '•'}</button>
       <div><div class="nm">${esc(p.PositionName)}</div><div class="meta">${esc(p.PositionCode)} · ${esc(p.Department || p.Branch)}${p.StoreCode !== 'ALL' ? ' · ' + esc(p.StoreCode) + ' only' : ''}</div></div>
       ${headcount(p, store)}
-      ${canEdit ? `<span class="acts"><button data-add="${esc(p.PositionCode)}">+ Under</button><button data-edit="${esc(p.PositionCode)}">Edit</button></span>` : ''}
+      <span class="acts"><a href="roles.html#${esc(p.PositionCode)}" style="font-size:12px;padding:4px 6px">Role</a></span>${canEdit ? `<span class="acts"><button data-add="${esc(p.PositionCode)}">+ Under</button><button data-edit="${esc(p.PositionCode)}">Edit</button></span>` : ''}
     </div>${ch.length && open ? `<ul>${ch.map(node).join('')}</ul>` : ''}</li>`;
   };
   const roots = list.filter(p => !p.ParentPositionCode || !list.find(x => x.PositionCode === p.ParentPositionCode));

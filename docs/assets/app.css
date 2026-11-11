@@ -57,3 +57,15 @@ dialog form{padding:20px}dialog h3{margin:0 0 8px}
 .err-box{white-space:pre-wrap;background:#fde8e6;color:var(--err);border-radius:8px;padding:10px;margin-top:10px;font-size:13px;max-height:220px;overflow:auto}
 .hint{font-weight:400;color:var(--muted);font-size:12px}
 tr.click{cursor:pointer}tr.click:hover td{background:#f7f9fc}
+.split{display:grid;grid-template-columns:280px 1fr;gap:16px}
+@media (max-width:800px){.split{grid-template-columns:1fr}}
+.plist{max-height:70vh;overflow:auto;padding:0;margin:0;list-style:none}
+.plist li{padding:8px 10px;border-radius:8px;cursor:pointer;display:flex;justify-content:space-between;gap:8px}
+.plist li:hover{background:#f1f4f9}.plist li.on{background:#e6edf8;font-weight:600}
+.dot{width:8px;height:8px;border-radius:50%;background:#d0d5dd;flex:none;margin-top:6px}.dot.ok{background:var(--ok)}
+.doc h3{margin:18px 0 6px;font-size:14px;color:var(--brand)}
+.doc dl{display:grid;grid-template-columns:180px 1fr;gap:6px 12px;margin:0}.doc dt{color:var(--muted)}.doc dd{margin:0}
+@media (max-width:600px){.doc dl{grid-template-columns:1fr}}
+textarea{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:8px;font:inherit;min-height:60px;resize:vertical}
+.duty{display:grid;grid-template-columns:1fr 140px 36px;gap:6px;margin-bottom:6px}
+@media print{.top,.plist,.noprint,#listCard{display:none!important}.split{display:block}main{padding:0}.card{border:0}}

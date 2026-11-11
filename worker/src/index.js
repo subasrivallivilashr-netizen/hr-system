@@ -206,6 +206,40 @@ export class Hub {
     return out;
   }
 
+  // Replace all data rows of a tab (used for small lists that are edited as a whole)
+  async rewriteTab(module, tab, objs) {
+    const id = await this.ssId(module);
+    const head = await this.headers(module, tab);
+    await this.gfetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}/values/${encodeURIComponent(tab)}!A2:ZZ:clear`, { method: 'POST', body: '{}' });
+    if (objs.length) {
+      const values = objs.map(o => head.map(h => o[h] === undefined ? '' : o[h]));
+      await this.gfetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}/values/${encodeURIComponent(tab)}!A2?valueInputOption=RAW`,
+        { method: 'PUT', body: JSON.stringify({ values }) });
+    }
+    this.cache.delete(module + '/' + tab);
+  }
+
+  async writeRole(code, summary, duties, keepDutiesIfEmpty) {
+    const sums = await this.read('Library', 'Role_Summary');
+    const old = sums.find(x => x.PositionCode === code);
+    const version = old ? Number(old.Version || 0) + 1 : 1;
+    const row = {
+      PositionCode: code, JobPurpose: summary.JobPurpose || '', Authority: summary.Authority || '',
+      Qualification: summary.Qualification || '', Experience: summary.Experience || '', Skills: summary.Skills || '',
+      WorkingConditions: summary.WorkingConditions || '', NextPosition: String(summary.NextPosition || '').toUpperCase(),
+      PromotionCriteria: summary.PromotionCriteria || '', Version: version, ApprovedBy: summary.ApprovedBy || ''
+    };
+    if (old) await this.update('Library', 'Role_Summary', 'PositionCode', code, row);
+    else await this.append('Library', 'Role_Summary', [row]);
+    if (duties.length || !keepDutiesIfEmpty) {
+      const all = (await this.read('Library', 'Role_Responsibilities')).map(clean).filter(x => x.PositionCode !== code);
+      duties.filter(d => String(d.Responsibility || '').trim()).forEach((d, i) =>
+        all.push({ PositionCode: code, SlNo: i + 1, Responsibility: String(d.Responsibility).trim(), Frequency: d.Frequency || 'Daily' }));
+      await this.rewriteTab('Library', 'Role_Responsibilities', all);
+    }
+    return version;
+  }
+
   async log(module, recordId, action, remarks, doneBy) {
     try {
       await this.append('ActivityLog', 'Activity_Log', [{ Timestamp: new Date().toISOString(), Module: module, RecordId: recordId, Action: action, Remarks: remarks, DoneBy: doneBy }]);
@@ -502,6 +536,48 @@ const ACTIONS = {
       await this.append('Organisation', 'Employees', rows.map(r => ({ ...r, CreatedAt: now, UpdatedAt: now })));
       await this.log('Organisation', 'IMPORT', 'Employees imported', rows.length + ' rows', user.u);
       return { message: `${rows.length} employees imported`, count: rows.length };
+    }
+  },
+
+  // ── Roles & Responsibilities ──
+  getRoles: {
+    auth: true,
+    fn: async function () {
+      const positions = (await this.read('Organisation', 'Positions')).map(clean).filter(p => p.Active !== 'No');
+      const summaries = (await this.read('Library', 'Role_Summary')).map(clean);
+      const duties = (await this.read('Library', 'Role_Responsibilities')).map(clean);
+      return { positions, summaries, duties };
+    }
+  },
+
+  saveRole: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR], write: true,
+    fn: async function (p, user) {
+      const code = String(p.positionCode || '').toUpperCase();
+      const positions = await this.read('Organisation', 'Positions');
+      if (!positions.find(x => x.PositionCode === code)) throw new Error('Unknown position: ' + code);
+      const version = await this.writeRole(code, p.summary || {}, p.duties || []);
+      await this.log('Library', code, 'Role document saved', 'v' + version, user.u);
+      return { message: 'Saved as version ' + version, version };
+    }
+  },
+
+  importRoles: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR], write: true,
+    fn: async function (p, user) {
+      const positions = await this.read('Organisation', 'Positions');
+      const codes = new Set(positions.map(x => x.PositionCode));
+      const sums = (p.summaries || []).filter(x => x.PositionCode);
+      const duties = (p.duties || []).filter(x => x.PositionCode && x.Responsibility);
+      const bad = [...new Set(sums.concat(duties).map(x => String(x.PositionCode).toUpperCase()).filter(c => !codes.has(c)))];
+      if (bad.length) throw new Error('Nothing imported. Unknown position codes: ' + bad.join(', '));
+      const all = [...new Set(sums.concat(duties).map(x => String(x.PositionCode).toUpperCase()))];
+      for (const code of all) {
+        const sm = sums.find(x => String(x.PositionCode).toUpperCase() === code) || {};
+        await this.writeRole(code, sm, duties.filter(x => String(x.PositionCode).toUpperCase() === code), true);
+      }
+      await this.log('Library', 'IMPORT', 'Role documents imported', all.length + ' positions', user.u);
+      return { message: `Role documents imported for ${all.length} positions` };
     }
   },
 

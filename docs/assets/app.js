@@ -36,6 +36,7 @@ function showMsg(el, text, ok) { el.textContent = text; el.className = 'msg ' + 
 const NAV = [
   { key: 'org', label: 'Organisation', href: 'org.html', roles: ['SuperAdmin', 'Admin', 'HR', 'Manager'] },
   { key: 'employees', label: 'Employees', href: 'employees.html', roles: ['SuperAdmin', 'Admin', 'HR', 'Manager'] },
+  { key: 'roles', label: 'Roles', href: 'roles.html', roles: ['SuperAdmin', 'Admin', 'HR', 'Manager'] },
   { key: 'settings', label: 'Settings', href: 'settings.html', roles: ['SuperAdmin', 'Admin'] }
 ];
 function renderTop(active, companyName) {

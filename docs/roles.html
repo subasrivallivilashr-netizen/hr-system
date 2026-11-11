@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Roles & Responsibilities</title><link rel="stylesheet" href="assets/app.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script></head>
+<body>
+<header class="top" id="top"></header>
+<main>
+  <div class="split">
+    <section class="card" id="listCard">
+      <h2>Positions</h2><p class="sub" id="done"></p>
+      <input id="q" placeholder="Search" style="margin-bottom:8px">
+      <ul class="plist" id="plist"></ul>
+      <div class="noprint" id="impBtns" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
+        <button id="tpl">Download template</button><button id="imp">Import Excel</button><input type="file" id="file" accept=".xlsx,.xls" class="hidden">
+      </div>
+    </section>
+    <section class="card" id="view"><p class="sub">Choose a position on the left.</p></section>
+  </div>
+</main>
+<script src="assets/app.js"></script>
+<script>
+const S = guard(['SuperAdmin', 'Admin', 'HR', 'Manager']);
+renderTop('roles');
+const canEdit = S && ['SuperAdmin', 'Admin', 'HR'].includes(S.role);
+if (!canEdit) $('#impBtns').classList.add('hidden');
+let D = null, cur = null;
+const FREQ = ['Daily', 'Weekly', 'Monthly', 'As needed'];
+const pos = c => D.positions.find(p => p.PositionCode === c);
+const pname = c => (pos(c) || {}).PositionName || c || '—';
+const sumOf = c => D.summaries.find(s => s.PositionCode === c);
+const dutiesOf = c => D.duties.filter(d => d.PositionCode === c).sort((a, b) => a.SlNo - b.SlNo);
+
+async function load() { D = await api('getRoles'); list(); const h = location.hash.slice(1); if (h && pos(h)) show(h); else if (cur) show(cur); }
+
+function ordered() {
+  const out = [], walk = (code, d) => D.positions.filter(p => (p.ParentPositionCode || '') === code).sort((a, b) => a.PositionName.localeCompare(b.PositionName)).forEach(p => { out.push([p, d]); walk(p.PositionCode, d + 1); });
+  walk('', 0); D.positions.forEach(p => { if (!out.find(o => o[0] === p)) out.push([p, 0]); });
+  return out;
+}
+function list() {
+  const q = $('#q').value.trim().toLowerCase();
+  const done = D.positions.filter(p => sumOf(p.PositionCode)).length;
+  $('#done').textContent = `${done} of ${D.positions.length} positions have a role document`;
+  $('#plist').innerHTML = ordered().filter(([p]) => !q || p.PositionName.toLowerCase().includes(q))
+    .map(([p, d]) => `<li data-c="${esc(p.PositionCode)}" class="${p.PositionCode === cur ? 'on' : ''}"><span style="padding-left:${d * 12}px">${esc(p.PositionName)}</span><span class="dot ${sumOf(p.PositionCode) ? 'ok' : ''}" title="${sumOf(p.PositionCode) ? 'Has role document' : 'Missing'}"></span></li>`).join('');
+  document.querySelectorAll('#plist li').forEach(li => li.onclick = () => { location.hash = li.dataset.c; show(li.dataset.c); });
+}
+$('#q').addEventListener('input', list);
+
+function show(code) {
+  cur = code; list();
+  const p = pos(code), s = sumOf(code) || {}, ds = dutiesOf(code);
+  const reports = D.positions.filter(x => x.ParentPositionCode === code).map(x => x.PositionName).join(', ') || 'None';
+  const row = (k, v) => `<dt>${k}</dt><dd>${esc(v) || '<span style="color:var(--muted)">—</span>'}</dd>`;
+  $('#view').innerHTML = `
+    <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:start">
+      <div><h2>${esc(p.PositionName)}</h2><p class="sub">${esc(p.PositionCode)} · ${esc(p.Branch)}${p.Department ? ' · ' + esc(p.Department) : ''}${s.Version ? ' · Version ' + esc(s.Version) : ' · No role document yet'}</p></div>
+      <div class="noprint" style="display:flex;gap:6px">${s.Version ? '<button onclick="print()">Print</button>' : ''}${canEdit ? '<button class="btn" id="edit">' + (s.Version ? 'Edit' : 'Create') + '</button>' : ''}</div>
+    </div>
+    <div class="doc">
+      <dl>${row('Reports to', pname(p.ParentPositionCode))}${row('Direct reports', reports)}</dl>
+      <h3>Job purpose</h3><p style="margin:0">${esc(s.JobPurpose) || '<span style="color:var(--muted)">—</span>'}</p>
+      <h3>Key responsibilities</h3>
+      ${ds.length ? `<table><thead><tr><th style="width:40px">#</th><th>Responsibility</th><th style="width:110px">Frequency</th></tr></thead><tbody>${ds.map(d => `<tr><td>${esc(d.SlNo)}</td><td>${esc(d.Responsibility)}</td><td>${esc(d.Frequency)}</td></tr>`).join('')}</tbody></table>` : '<p class="sub">No duties added.</p>'}
+      <h3>Authority / decision rights</h3><p style="margin:0">${esc(s.Authority) || '—'}</p>
+      <h3>Requirements</h3><dl>${row('Qualification', s.Qualification)}${row('Experience', s.Experience)}${row('Skills & languages', s.Skills)}</dl>
+      <h3>Working conditions</h3><p style="margin:0">${esc(s.WorkingConditions) || '—'}</p>
+      <h3>Career path</h3><dl>${row('Next position', s.NextPosition ? pname(s.NextPosition) : '')}${row('Promotion criteria', s.PromotionCriteria)}</dl>
+      <h3>Approval</h3><dl>${row('Approved by', s.ApprovedBy)}${row('Version', s.Version)}</dl>
+    </div>`;
+  if (canEdit) $('#edit').onclick = () => edit(code);
+}
+
+function edit(code) {
+  const p = pos(code), s = sumOf(code) || {}, ds = dutiesOf(code);
+  const ta = (k, label, ph) => `<label>${label}</label><textarea name="${k}" placeholder="${ph || ''}">${esc(s[k])}</textarea>`;
+  const inp = (k, label, ph) => `<div><label>${label}</label><input name="${k}" value="${esc(s[k])}" placeholder="${ph || ''}"></div>`;
+  $('#view').innerHTML = `<h2>Edit role — ${esc(p.PositionName)}</h2><p class="sub">Saving creates version ${Number(s.Version || 0) + 1}.</p>
+    <form id="rf">
+      ${ta('JobPurpose', 'Job purpose', '1–2 lines: why this role exists')}
+      <label>Key responsibilities</label><div id="duties"></div><button type="button" id="addDuty">+ Add duty</button>
+      ${ta('Authority', 'Authority / decision rights', 'e.g. Discount up to 5%; exchange within policy')}
+      <div class="grid">${inp('Qualification', 'Qualification', '12th pass')}${inp('Experience', 'Experience', '0–2 years')}${inp('Skills', 'Skills & languages', 'Customer handling; Kannada, Hindi')}</div>
+      ${ta('WorkingConditions', 'Working conditions', 'Shift, week-off, weekend working')}
+      <div class="grid"><div><label>Next position (career path)</label><select name="NextPosition"><option value="">—</option>${D.positions.filter(x => x.PositionCode !== code).map(x => `<option value="${esc(x.PositionCode)}" ${x.PositionCode === s.NextPosition ? 'selected' : ''}>${esc(x.PositionName)}</option>`).join('')}</select></div>
+      ${inp('PromotionCriteria', 'Promotion criteria', '12 months with KPI rating B+')}${inp('ApprovedBy', 'Approved by', 'e.g. Store Manager')}</div>
+      <div class="row-end"><span class="msg" id="m-r"></span><button type="button" id="cancel">Cancel</button><button class="btn" id="save">Save</button></div>
+    </form>`;
+  const addDuty = (d = {}) => {
+    const div = document.createElement('div'); div.className = 'duty';
+    div.innerHTML = `<input class="dr" value="${esc(d.Responsibility)}" placeholder="Responsibility"><select class="df">${FREQ.map(f => `<option ${f === d.Frequency ? 'selected' : ''}>${f}</option>`).join('')}</select><button type="button" title="Remove">✕</button>`;
+    div.querySelector('button').onclick = () => div.remove();
+    $('#duties').appendChild(div);
+  };
+  (ds.length ? ds : [{}, {}, {}]).forEach(addDuty);
+  $('#addDuty').onclick = () => addDuty();
+  $('#cancel').onclick = () => show(code);
+  $('#rf').onsubmit = async e => {
+    e.preventDefault(); const b = $('#save'); b.disabled = true;
+    const summary = {}; [...$('#rf').elements].forEach(el => { if (el.name) summary[el.name] = el.value.trim(); });
+    const duties = [...document.querySelectorAll('.duty')].map(d => ({ Responsibility: d.querySelector('.dr').value.trim(), Frequency: d.querySelector('.df').value })).filter(d => d.Responsibility);
+    try { await api('saveRole', { positionCode: code, summary, duties }); await load(); show(code); }
+    catch (err) { showMsg($('#m-r'), err.message); b.disabled = false; }
+  };
+}
+
+// Excel template / import
+const SUM = [['PositionCode','Position Code'],['JobPurpose','Job Purpose'],['Authority','Authority / Decision Rights'],['Qualification','Qualification'],['Experience','Experience'],['Skills','Skills & Languages'],['WorkingConditions','Working Conditions'],['NextPosition','Next Position (Career Path)'],['PromotionCriteria','Promotion Criteria'],['ApprovedBy','Approved By']];
+const DUT = [['PositionCode','Position Code'],['Responsibility','Responsibility'],['Frequency','Frequency']];
+$('#tpl').onclick = () => {
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([SUM.map(c => c[1]), ...D.positions.map(p => { const s = sumOf(p.PositionCode) || {}; return SUM.map(([k]) => k === 'PositionCode' ? p.PositionCode : s[k] || ''); })]), 'Role Summary');
+  const drows = []; D.positions.forEach(p => dutiesOf(p.PositionCode).forEach(d => drows.push([p.PositionCode, d.Responsibility, d.Frequency])));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([DUT.map(c => c[1]), ...drows]), 'Role Responsibilities');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Position Code', 'Position Name'], ...D.positions.map(p => [p.PositionCode, p.PositionName])]), 'Positions (reference)');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Rules'], ['Role Summary: one row per position. Rows left blank are skipped.'], ['Role Responsibilities: one row per duty. Frequency: Daily / Weekly / Monthly / As needed.'], ['Importing a position replaces its current duties and adds a new version.']]), 'Read Me');
+  XLSX.writeFile(wb, 'Roles_Import_Template.xlsx');
+};
+function readSheet(wb, name, cols, keyLabel) {
+  const ws = wb.Sheets[name]; if (!ws) return [];
+  const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '' });
+  const h = aoa.findIndex(r => r.some(c => String(c).trim().toLowerCase() === keyLabel)); if (h < 0) return [];
+  const head = aoa[h].map(x => String(x).trim().toLowerCase());
+  const idx = cols.map(([k, l]) => [k, head.indexOf(l.toLowerCase())]);
+  return aoa.slice(h + 1).map(r => { const o = {}; idx.forEach(([k, i]) => o[k] = i >= 0 ? String(r[i]).trim() : ''); return o; }).filter(o => o.PositionCode);
+}
+$('#imp').onclick = () => $('#file').click();
+$('#file').onchange = async () => {
+  const f = $('#file').files[0]; if (!f) return; $('#file').value = '';
+  const wb = XLSX.read(await f.arrayBuffer());
+  const summaries = readSheet(wb, 'Role Summary', SUM, 'position code').filter(s => SUM.slice(1).some(([k]) => s[k]));
+  const duties = readSheet(wb, 'Role Responsibilities', DUT, 'position code').filter(d => d.Responsibility);
+  if (!summaries.length && !duties.length) return alert('No filled rows found. Use the downloaded template.');
+  if (!confirm(`Import ${summaries.length} role summaries and ${duties.length} duties?`)) return;
+  try { const r = await api('importRoles', { summaries, duties }); alert(r.message); await load(); } catch (e) { alert(e.message); }
+};
+window.addEventListener('hashchange', () => { const h = location.hash.slice(1); if (D && pos(h)) show(h); });
+if (S) load().catch(e => alert(e.message));
+</script></body></html>

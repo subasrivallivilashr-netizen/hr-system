@@ -150,9 +150,14 @@ export class Hub {
   }
 
   async headers(module, tab) {
+    this.headCache = this.headCache || new Map();
+    const hk = module + '/' + tab;
+    if (this.headCache.has(hk)) return this.headCache.get(hk);
     const id = await this.ssId(module);
     const j = await this.gfetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}/values/${encodeURIComponent(tab)}!1:1`);
-    return (j.values && j.values[0]) || [];
+    const h = (j.values && j.values[0]) || [];
+    this.headCache.set(hk, h);
+    return h;
   }
 
   // Append objects as rows (columns matched by header name)
@@ -223,12 +228,7 @@ export class Hub {
     const sums = await this.read('Library', 'Role_Summary');
     const old = sums.find(x => x.PositionCode === code);
     const version = old ? Number(old.Version || 0) + 1 : 1;
-    const row = {
-      PositionCode: code, JobPurpose: summary.JobPurpose || '', Authority: summary.Authority || '',
-      Qualification: summary.Qualification || '', Experience: summary.Experience || '', Skills: summary.Skills || '',
-      WorkingConditions: summary.WorkingConditions || '', NextPosition: String(summary.NextPosition || '').toUpperCase(),
-      PromotionCriteria: summary.PromotionCriteria || '', Version: version, ApprovedBy: summary.ApprovedBy || ''
-    };
+    const row = roleRow(code, summary, version);
     if (old) await this.update('Library', 'Role_Summary', 'PositionCode', code, row);
     else await this.append('Library', 'Role_Summary', [row]);
     if (duties.length || !keepDutiesIfEmpty) {
@@ -572,10 +572,20 @@ const ACTIONS = {
       const bad = [...new Set(sums.concat(duties).map(x => String(x.PositionCode).toUpperCase()).filter(c => !codes.has(c)))];
       if (bad.length) throw new Error('Nothing imported. Unknown position codes: ' + bad.join(', '));
       const all = [...new Set(sums.concat(duties).map(x => String(x.PositionCode).toUpperCase()))];
+      // Build everything in memory, then write each tab once (stays within Cloudflare's call limit)
+      const existing = (await this.read('Library', 'Role_Summary')).map(clean);
+      const summaryRows = existing.filter(r => !all.includes(r.PositionCode));
       for (const code of all) {
-        const sm = sums.find(x => String(x.PositionCode).toUpperCase() === code) || {};
-        await this.writeRole(code, sm, duties.filter(x => String(x.PositionCode).toUpperCase() === code), true);
+        const old = existing.find(r => r.PositionCode === code);
+        const sm = sums.find(x => String(x.PositionCode).toUpperCase() === code) || old || {};
+        summaryRows.push(roleRow(code, sm, old ? Number(old.Version || 0) + 1 : 1));
       }
+      const withDuties = new Set(duties.map(x => String(x.PositionCode).toUpperCase()));
+      const dutyRows = (await this.read('Library', 'Role_Responsibilities')).map(clean).filter(r => !withDuties.has(r.PositionCode));
+      withDuties.forEach(code => duties.filter(x => String(x.PositionCode).toUpperCase() === code)
+        .forEach((d, i) => dutyRows.push({ PositionCode: code, SlNo: i + 1, Responsibility: String(d.Responsibility).trim(), Frequency: d.Frequency || 'Daily' })));
+      await this.rewriteTab('Library', 'Role_Summary', summaryRows);
+      await this.rewriteTab('Library', 'Role_Responsibilities', dutyRows);
       await this.log('Library', 'IMPORT', 'Role documents imported', all.length + ' positions', user.u);
       return { message: `Role documents imported for ${all.length} positions` };
     }
@@ -633,6 +643,14 @@ function validateEmp(e, ctx, existing) {
   }
 }
 
+function roleRow(code, x, version) {
+  return {
+    PositionCode: code, JobPurpose: x.JobPurpose || '', Authority: x.Authority || '',
+    Qualification: x.Qualification || '', Experience: x.Experience || '', Skills: x.Skills || '',
+    WorkingConditions: x.WorkingConditions || '', NextPosition: String(x.NextPosition || '').toUpperCase(),
+    PromotionCriteria: x.PromotionCriteria || '', Version: version, ApprovedBy: x.ApprovedBy || ''
+  };
+}
 function clean(r) { const o = { ...r }; delete o._row; return o; }
 function json(obj, status = 200) {
   return new Response(JSON.stringify(obj), { status, headers: { 'Content-Type': 'application/json' } });

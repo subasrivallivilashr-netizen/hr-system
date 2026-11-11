@@ -10,7 +10,7 @@
     <button data-t="bands">Rating bands</button>
     <button data-t="entry">Monthly entry</button>
     <button data-t="approve" id="apTab">Approval</button>
-    <button data-t="soon" title="Part 3">Reports</button>
+    <button data-t="reports">Reports</button>
   </div>
 
   <section id="t-params">
@@ -65,6 +65,35 @@
     <div class="row-end"><span class="msg" id="m-e"></span><button value="cancel" formnovalidate>Close</button><button id="eSave">Save draft</button><button class="btn" id="eSub">Submit to HR</button></div>
   </form></dialog>
 
+  <section id="t-reports" class="hidden">
+    <section class="card">
+      <div class="filters">
+        <div><label>From</label><input type="month" id="rFrom"></div>
+        <div><label>To</label><input type="month" id="rTo"></div>
+        <div><label>Store</label><select id="rStore"><option value="">All</option></select></div>
+        <div><label>Include</label><select id="rInc"><option value="approved">Approved only</option><option value="submitted">Approved + submitted</option></select></div>
+        <div style="flex:0"><label>&nbsp;</label><button class="btn" id="rGo">Show</button></div>
+      </div>
+    </section>
+    <div class="kpis-row" id="rTiles"></div>
+    <div class="cols2">
+      <section class="card"><h2>Band distribution</h2><p class="sub" id="rBandSub"></p><div class="bars" id="rBands"></div></section>
+      <section class="card"><h2>Average score by store</h2><p class="sub">Latest month in range</p><div class="bars" id="rStores"></div></section>
+    </div>
+    <section class="card"><h2>Average score by position</h2><p class="sub">Latest month in range</p><div class="bars" id="rPos"></div></section>
+    <div class="cols2">
+      <section class="card"><h2>Top 10</h2><div class="tbl-wrap"><table><tbody id="rTop"></tbody></table></div></section>
+      <section class="card"><h2>Watch list</h2><p class="sub">Lowest band in 2 or more months of the range</p><div class="tbl-wrap"><table><tbody id="rWatch"></tbody></table></div></section>
+    </div>
+    <section class="card">
+      <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:end">
+        <div><h2>Employee trend</h2><p class="sub">Score month by month, and KPI detail</p></div>
+        <div style="display:flex;gap:8px;align-items:end"><div style="min-width:240px"><label>Employee</label><select id="rEmp"></select></div><button id="rExport">Export summary (Excel)</button></div>
+      </div>
+      <div id="rTrend"></div>
+    </section>
+  </section>
+
   <section id="t-soon" class="card hidden"><h2>Coming next</h2><p class="sub">Monthly entry, approval and reports are being built in the next parts.</p></section>
 </main>
 
@@ -98,8 +127,9 @@ const total = c => kpisOf(c).reduce((a, k) => a + Number(k.WeightPct || 0), 0);
 
 document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => {
   document.querySelectorAll('#tabs button').forEach(x => x.classList.toggle('on', x === b));
-  ['params', 'bands', 'soon', 'entry', 'approve'].forEach(t => $('#t-' + t).classList.toggle('hidden', t !== b.dataset.t));
+  ['params', 'bands', 'soon', 'entry', 'approve', 'reports'].forEach(t => $('#t-' + t).classList.toggle('hidden', t !== b.dataset.t));
   if (b.dataset.t === 'entry' || b.dataset.t === 'approve') loadMonth();
+  if (b.dataset.t === 'reports' && !R) loadReport();
 });
 
 async function load() { D = await api('getKpiSetup'); list(); bands(); if (cur) show(cur); }
@@ -331,6 +361,73 @@ $('#lockBtn').onclick = async () => {
   else { const pending = M.employees.length - M.employees.filter(e => statusOf(e.EmpId) === 'Approved').length;
     if (!confirm(`Lock ${M.month}?` + (pending ? `\n${pending} employees are not approved yet and will stay unapproved.` : '') + '\nNo one can change figures after locking.')) return; }
   try { await api('setKpiCycle', { month: M.month, status: lk ? 'Open' : 'Locked', reason }); await loadMonth(); } catch (e) { alert(e.message); }
+};
+
+// ───── Reports ─────
+let R = null;
+(() => { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1); $('#rTo').value = d.toISOString().slice(0, 7); d.setMonth(d.getMonth() - 5); $('#rFrom').value = d.toISOString().slice(0, 7); })();
+$('#rGo').onclick = () => loadReport();
+['rStore'].forEach(i => $('#' + i).addEventListener('change', drawReport));
+$('#rEmp').addEventListener('change', () => loadTrend($('#rEmp').value));
+const avg = a => a.length ? Math.round(a.reduce((x, y) => x + y, 0) / a.length * 10) / 10 : 0;
+const bandColor = b => ({ A: 'bandA', B: 'bandB', C: 'bandC', D: 'bandD' }[b] || '');
+function bars(el, items, max) {
+  max = max || Math.max(1, ...items.map(i => i[1]));
+  $(el).innerHTML = items.map(([l, v, cls, note]) => `<div class="bar"><span title="${esc(l)}" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(l)}</span><div class="tr"><div class="fl ${cls || ''}" style="width:${Math.min(100, v / max * 100)}%"></div></div><b>${esc(note ?? v)}</b></div>`).join('') || '<p class="sub">No data.</p>';
+}
+async function loadReport() {
+  try { R = await api('getKpiReport', { from: $('#rFrom').value, to: $('#rTo').value, include: $('#rInc').value }); } catch (e) { return alert(e.message); }
+  const stores = [...new Set(R.employees.map(e => e.StoreCode))].sort(), keep = $('#rStore').value;
+  $('#rStore').innerHTML = '<option value="">All</option>' + stores.map(s => `<option>${esc(s)}</option>`).join(''); $('#rStore').value = keep;
+  drawReport();
+}
+function drawReport() {
+  const st = $('#rStore').value;
+  const ok = new Set(R.employees.filter(e => !st || e.StoreCode === st).map(e => e.EmpId));
+  const rows = R.summaries.filter(s => ok.has(s.EmpId) && s.TotalScore !== '');
+  const months = [...new Set(rows.map(r => r.Month))].sort(), last = months[months.length - 1];
+  const cur = rows.filter(r => r.Month === last);
+  const pN = c => (R.positions.find(p => p.PositionCode === c) || {}).PositionName || c;
+  const emp = id => R.employees.find(e => e.EmpId === id) || {};
+  const bandsSorted = [...R.bands].sort((a, b) => b.MinScore - a.MinScore);
+  const lowest = bandsSorted[bandsSorted.length - 1]?.Band;
+  $('#rTiles').innerHTML = [[last || '—', 'Latest month'], [cur.length, 'Employees scored'], [avg(cur.map(r => +r.TotalScore)), 'Average score'],
+    [cur.filter(r => r.Band === bandsSorted[0]?.Band).length, `In band ${bandsSorted[0]?.Band || ''}`], [cur.filter(r => r.Band === lowest).length, `In band ${lowest || ''}`]]
+    .map(([v, l]) => `<div class="tile"><div class="v">${esc(v)}</div><div class="l">${esc(l)}</div></div>`).join('');
+  $('#rBandSub').textContent = last ? `${last} · ${cur.length} employees` : 'No approved scores in this range';
+  bars('#rBands', bandsSorted.map(b => { const n = cur.filter(r => r.Band === b.Band).length; return [`${b.Band} · ${b.Meaning || ''}`, n, bandColor(b.Band), `${n} (${cur.length ? Math.round(n / cur.length * 100) : 0}%)`]; }), cur.length || 1);
+  const group = key => { const g = {}; cur.forEach(r => { const k = key(r); (g[k] = g[k] || []).push(+r.TotalScore); }); return Object.entries(g).map(([k, v]) => [k, avg(v), '', `${avg(v)} · ${v.length}`]).sort((a, b) => b[1] - a[1]); };
+  bars('#rStores', group(r => r.StoreCode), 120);
+  bars('#rPos', group(r => pN(emp(r.EmpId).PositionCode)), 120);
+  $('#rTop').innerHTML = [...cur].sort((a, b) => b.TotalScore - a.TotalScore).slice(0, 10).map((r, i) => `<tr><td>${i + 1}</td><td><b>${esc(emp(r.EmpId).FullName)}</b></td><td>${esc(pN(emp(r.EmpId).PositionCode))}</td><td>${esc(r.StoreCode)}</td><td>${esc(r.TotalScore)}</td><td><span class="pill">${esc(r.Band)}</span></td></tr>`).join('') || '<tr><td class="sub">No data</td></tr>';
+  const low = {}; rows.filter(r => r.Band === lowest).forEach(r => (low[r.EmpId] = low[r.EmpId] || []).push(r.Month));
+  $('#rWatch').innerHTML = Object.entries(low).filter(([, m]) => m.length >= 2).map(([id, m]) => `<tr><td><b>${esc(emp(id).FullName)}</b></td><td>${esc(pN(emp(id).PositionCode))}</td><td>${esc(emp(id).StoreCode)}</td><td class="under">${m.length} months (${m.sort().join(', ')})</td></tr>`).join('') || '<tr><td class="sub">No one is in the lowest band repeatedly.</td></tr>';
+  const opts = R.employees.filter(e => ok.has(e.EmpId)).sort((a, b) => a.FullName.localeCompare(b.FullName));
+  const kept = $('#rEmp').value;
+  $('#rEmp').innerHTML = '<option value="">— Choose —</option>' + opts.map(e => `<option value="${esc(e.EmpId)}">${esc(e.FullName)} · ${esc(pN(e.PositionCode))}</option>`).join('');
+  $('#rEmp').value = kept; if (!kept) $('#rTrend').innerHTML = '';
+}
+async function loadTrend(id) {
+  if (!id) return $('#rTrend').innerHTML = '';
+  let T; try { T = await api('getKpiReport', { from: $('#rFrom').value, to: $('#rTo').value, include: $('#rInc').value, empId: id }); } catch (e) { return alert(e.message); }
+  const sm = T.summaries.filter(s => s.EmpId === id && s.TotalScore !== '').sort((a, b) => a.Month < b.Month ? -1 : 1);
+  if (!sm.length) return $('#rTrend').innerHTML = '<p class="sub">No scores in this range.</p>';
+  const W = 640, H = 200, P = 32, max = Math.max(120, ...sm.map(s => +s.TotalScore));
+  const x = i => P + (sm.length === 1 ? (W - 2 * P) / 2 : i * (W - 2 * P) / (sm.length - 1)), y = v => H - P - v / max * (H - 2 * P);
+  const pts = sm.map((s, i) => `${x(i)},${y(+s.TotalScore)}`).join(' ');
+  const grid = [0, 60, 75, 90].map(v => `<line x1="${P}" x2="${W - P}" y1="${y(v)}" y2="${y(v)}" stroke="#e3e6eb"/><text x="4" y="${y(v) + 4}" font-size="10" fill="#6b7280">${v}</text>`).join('');
+  const svg = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:${W}px">${grid}<polyline points="${pts}" fill="none" stroke="#2f5597" stroke-width="2.5"/>${sm.map((s, i) => `<circle cx="${x(i)}" cy="${y(+s.TotalScore)}" r="4" fill="#2f5597"/><text x="${x(i)}" y="${y(+s.TotalScore) - 9}" font-size="11" text-anchor="middle" fill="#1c2230">${s.TotalScore} ${s.Band}</text><text x="${x(i)}" y="${H - 10}" font-size="10" text-anchor="middle" fill="#6b7280">${s.Month}</text>`).join('')}</svg>`;
+  const last = sm[sm.length - 1].Month;
+  const det = T.entries.filter(e => e.Month === last);
+  $('#rTrend').innerHTML = svg + `<h3 style="font-size:14px;margin:12px 0 6px">KPI detail — ${esc(last)}</h3><div class="tbl-wrap"><table><thead><tr><th>KPI</th><th>Target</th><th>Actual</th><th>Achievement</th><th>Weight</th><th>Score</th></tr></thead><tbody>${det.map(e => `<tr><td>${esc(e.KpiName)}</td><td>${esc(e.Target)}</td><td>${esc(e.Actual)}</td><td>${esc(e.AchievementPct)}%</td><td>${esc(e.WeightPct)}%</td><td>${esc(e.Score)}</td></tr>`).join('')}</tbody></table></div>`;
+}
+$('#rExport').onclick = () => {
+  if (!R) return;
+  const pN = c => (R.positions.find(p => p.PositionCode === c) || {}).PositionName || c;
+  const rows = [['Month', 'Employee ID', 'Name', 'Position', 'Store', 'Score', 'Band', 'Status', 'Approved by', 'Remarks']];
+  R.summaries.forEach(s => { const e = R.employees.find(x => x.EmpId === s.EmpId) || {}; rows.push([s.Month, s.EmpId, e.FullName, pN(e.PositionCode), s.StoreCode, s.TotalScore, s.Band, s.Status, s.ApprovedBy, s.ManagerRemarks]); });
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'KPI Summary');
+  XLSX.writeFile(wb, `KPI_Summary_${R.from}_to_${R.to}.xlsx`);
 };
 
 if (S) load().catch(e => alert(e.message));

@@ -828,6 +828,28 @@ const ACTIONS = {
     }
   },
 
+  getKpiReport: {
+    auth: true,
+    fn: async function (p, user) {
+      const to = checkMonth(p.to), from = checkMonth(p.from || p.to);
+      if (from > to) throw new Error('"From" month is after "To" month');
+      const ctx = await this.kpiContext(to, user);
+      const includeAll = p.include === 'submitted';
+      const reg = await this.getRegistry();
+      const summaries = [], entries = [];
+      for (let y = Number(from.slice(0, 4)); y <= Number(to.slice(0, 4)); y++) {
+        if (!reg['KPI_' + y]) continue;
+        (await this.read('KPI_' + y, 'KPI_Summary')).forEach(r => {
+          if (r.Month >= from && r.Month <= to && ctx.team.has(r.EmpId) && (r.Status === 'Approved' || (includeAll && r.Status === 'Submitted'))) summaries.push(clean(r));
+        });
+        if (p.empId) (await this.read('KPI_' + y, 'KPI_Entries')).forEach(r => {
+          if (r.EmpId === p.empId && r.Month >= from && r.Month <= to) entries.push(clean(r));
+        });
+      }
+      return { from, to, summaries, entries, employees: ctx.employees, positions: ctx.positions, bands: ctx.bands };
+    }
+  },
+
   changeMyPassword: {
     auth: true, write: true,
     fn: async function (p, user) {

@@ -179,6 +179,33 @@ export class Hub {
     this.cache.delete(module + '/' + tab);
   }
 
+  async empContext() {
+    const employees = await this.read('Organisation', 'Employees');
+    const positions = (await this.read('Organisation', 'Positions')).filter(p => p.Active !== 'No');
+    const stores = (await this.read('Settings', 'Stores')).filter(s => s.Active !== 'No');
+    const company = {}; (await this.read('Settings', 'Company')).forEach(r => company[r.Key] = r.Value);
+    return { employees, positions, stores, company };
+  }
+
+  // Generates the next IDs (one per store code given) and saves the counters
+  async nextEmpIds(storeCodes, ctx) {
+    if (!storeCodes.length) return [];
+    const c = ctx.company, perStore = c.EmpIdPerStore === 'Yes';
+    const prefix = c.EmpIdPrefix || 'EMP-', digits = Number(c.EmpIdDigits || 4);
+    const counters = {}, out = [];
+    for (const sc of storeCodes) {
+      const key = perStore ? 'EmpIdNext_' + sc : 'EmpIdNextNumber';
+      if (!(key in counters)) counters[key] = Number(c[key] || 1);
+      out.push(prefix + (perStore ? sc + '-' : '') + String(counters[key]++).padStart(digits, '0'));
+    }
+    const rows = await this.read('Settings', 'Company');
+    for (const [k, v] of Object.entries(counters)) {
+      if (rows.find(r => r.Key === k)) await this.update('Settings', 'Company', 'Key', k, { Value: v });
+      else await this.append('Settings', 'Company', [{ Key: k, Value: v }]);
+    }
+    return out;
+  }
+
   async log(module, recordId, action, remarks, doneBy) {
     try {
       await this.append('ActivityLog', 'Activity_Log', [{ Timestamp: new Date().toISOString(), Module: module, RecordId: recordId, Action: action, Remarks: remarks, DoneBy: doneBy }]);
@@ -416,6 +443,68 @@ const ACTIONS = {
     }
   },
 
+  // ── Employees ──
+  getEmployees: {
+    auth: true,
+    fn: async function () {
+      const employees = (await this.read('Organisation', 'Employees')).map(clean);
+      const positions = (await this.read('Organisation', 'Positions')).map(clean).filter(p => p.Active !== 'No');
+      const stores = (await this.read('Settings', 'Stores')).map(clean).filter(s => s.Active !== 'No');
+      return { employees, positions, stores };
+    }
+  },
+
+  saveEmployee: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR], write: true,
+    fn: async function (p, user) {
+      const e = normEmp(p.employee || {});
+      const ctx = await this.empContext();
+      const existing = e.EmpId && ctx.employees.find(x => x.EmpId === e.EmpId);
+      validateEmp(e, ctx, existing);
+      const now = new Date().toISOString();
+      if (existing) {
+        const moved = ['StoreCode', 'PositionCode', 'ReportingManagerId'].some(k => (e[k] || '') !== (existing[k] || ''));
+        await this.update('Organisation', 'Employees', 'EmpId', e.EmpId, { ...e, UpdatedAt: now });
+        if (moved) await this.append('Organisation', 'TransferHistory', [{
+          EmpId: e.EmpId, Date: now.slice(0, 10), FromStore: existing.StoreCode, ToStore: e.StoreCode,
+          FromPosition: existing.PositionCode, ToPosition: e.PositionCode, FromManager: existing.ReportingManagerId,
+          ToManager: e.ReportingManagerId, Reason: p.reason || '', DoneBy: user.u
+        }]);
+        await this.log('Organisation', e.EmpId, moved ? 'Employee moved' : 'Employee updated', e.FullName, user.u);
+        return { message: 'Saved', empId: e.EmpId };
+      }
+      const ids = await this.nextEmpIds([e.StoreCode], ctx);
+      e.EmpId = e.EmpId || ids[0];
+      if (ctx.employees.find(x => x.EmpId === e.EmpId)) throw new Error('Employee ID already exists: ' + e.EmpId);
+      await this.append('Organisation', 'Employees', [{ ...e, CreatedAt: now, UpdatedAt: now }]);
+      await this.log('Organisation', e.EmpId, 'Employee added', e.FullName, user.u);
+      return { message: 'Saved', empId: e.EmpId };
+    }
+  },
+
+  importEmployees: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR], write: true,
+    fn: async function (p, user) {
+      const rows = (p.rows || []).map(normEmp).filter(r => r.FullName);
+      if (!rows.length) throw new Error('No rows to import');
+      const ctx = await this.empContext();
+      const taken = new Set(ctx.employees.map(x => x.EmpId));
+      const errors = [];
+      // IDs: keep the ones given, generate the rest
+      const need = rows.filter(r => !r.EmpId);
+      const gen = await this.nextEmpIds(need.map(r => r.StoreCode), ctx);
+      need.forEach((r, i) => r.EmpId = gen[i]);
+      rows.forEach((r, i) => { if (taken.has(r.EmpId)) errors.push(`Row ${i + 1}: ID ${r.EmpId} already exists`); taken.add(r.EmpId); });
+      const all = { ...ctx, employees: ctx.employees.concat(rows) };
+      rows.forEach((r, i) => { try { validateEmp(r, all, null); } catch (err) { errors.push(`Row ${i + 1} (${r.FullName}): ${err.message}`); } });
+      if (errors.length) throw new Error('Nothing imported. Fix these first:\n' + errors.slice(0, 15).join('\n') + (errors.length > 15 ? `\n…and ${errors.length - 15} more` : ''));
+      const now = new Date().toISOString();
+      await this.append('Organisation', 'Employees', rows.map(r => ({ ...r, CreatedAt: now, UpdatedAt: now })));
+      await this.log('Organisation', 'IMPORT', 'Employees imported', rows.length + ' rows', user.u);
+      return { message: `${rows.length} employees imported`, count: rows.length };
+    }
+  },
+
   changeMyPassword: {
     auth: true, write: true,
     fn: async function (p, user) {
@@ -432,6 +521,42 @@ const ACTIONS = {
 
 
 // ───────────────────────── Helpers ─────────────────────────
+const EMP_FIELDS = ['EmpId', 'FullName', 'Gender', 'DOB', 'Phone', 'Email', 'StoreCode', 'PositionCode', 'ReportingManagerId', 'JoiningDate', 'EmploymentType', 'Status', 'ProbationEndDate', 'CandidateAppNo', 'ExitDate'];
+// Accepts DD-MM-YYYY, DD/MM/YYYY or YYYY-MM-DD; stores YYYY-MM-DD
+function normDate(v) {
+  if (v === undefined || v === null || v === '') return '';
+  if (typeof v === 'number') { const d = new Date(Math.round((v - 25569) * 86400000)); return d.toISOString().slice(0, 10); }
+  const s = String(v).trim();
+  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/); if (m) return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
+  m = s.match(/^(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{4})$/); if (m) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+  throw new Error('Date not understood: ' + s + ' (use DD-MM-YYYY)');
+}
+function normEmp(x) {
+  const e = {};
+  EMP_FIELDS.forEach(k => e[k] = x[k] === undefined || x[k] === null ? '' : String(x[k]).trim());
+  ['DOB', 'JoiningDate', 'ProbationEndDate', 'ExitDate'].forEach(k => e[k] = normDate(e[k]));
+  e.StoreCode = e.StoreCode.toUpperCase(); e.PositionCode = e.PositionCode.toUpperCase();
+  e.Status = e.Status || 'Probation'; e.EmploymentType = e.EmploymentType || 'Permanent';
+  return e;
+}
+function validateEmp(e, ctx, existing) {
+  if (!e.FullName) throw new Error('Full name is required');
+  if (!ctx.stores.find(s => s.StoreCode === e.StoreCode)) throw new Error('Unknown store code: ' + e.StoreCode);
+  const pos = ctx.positions.find(p => p.PositionCode === e.PositionCode);
+  if (!pos) throw new Error('Unknown position code: ' + e.PositionCode);
+  if (e.Phone && !/^\d{10}$/.test(e.Phone)) throw new Error('Phone must be 10 digits');
+  if (pos.ParentPositionCode) {
+    if (!e.ReportingManagerId) throw new Error('Reporting manager is required');
+    if (e.ReportingManagerId === e.EmpId) throw new Error('An employee cannot report to themselves');
+    const mgr = ctx.employees.find(x => x.EmpId === e.ReportingManagerId);
+    if (!mgr || mgr.Status === 'Exited') throw new Error('Reporting manager not found: ' + e.ReportingManagerId);
+  }
+  if (e.Status === 'Probation' && !e.ProbationEndDate && e.JoiningDate) {
+    const d = new Date(e.JoiningDate); d.setDate(d.getDate() + Number(ctx.company.ProbationDays || 90));
+    e.ProbationEndDate = d.toISOString().slice(0, 10);
+  }
+}
+
 function clean(r) { const o = { ...r }; delete o._row; return o; }
 function json(obj, status = 200) {
   return new Response(JSON.stringify(obj), { status, headers: { 'Content-Type': 'application/json' } });

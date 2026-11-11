@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Employees</title><link rel="stylesheet" href="assets/app.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script></head>
+<body>
+<header class="top" id="top"></header>
+<main>
+  <section class="card">
+    <div style="display:flex;justify-content:space-between;align-items:start;gap:8px;flex-wrap:wrap">
+      <div><h2>Employees</h2><p class="sub" id="count"></p></div>
+      <div id="editBtns" style="display:flex;gap:8px;flex-wrap:wrap">
+        <button id="tpl">Download import template</button>
+        <button id="imp">Import from Excel</button><input type="file" id="file" accept=".xlsx,.xls" class="hidden">
+        <button class="btn" id="add">+ Add employee</button>
+      </div>
+    </div>
+    <div class="filters">
+      <div><label>Search</label><input id="q" placeholder="Name, ID or phone"></div>
+      <div><label>Store</label><select id="fStore"></select></div>
+      <div><label>Position</label><select id="fPos"></select></div>
+      <div><label>Status</label><select id="fStatus"><option value="">Active (all)</option><option>Probation</option><option>Confirmed</option><option>Notice Period</option><option>Exited</option></select></div>
+    </div>
+    <div class="tbl-wrap"><table><thead><tr><th>ID</th><th>Name</th><th>Position</th><th>Store</th><th>Reports to</th><th>Joined</th><th>Status</th></tr></thead><tbody id="rows"></tbody></table></div>
+  </section>
+</main>
+
+<dialog id="dEmp"><form method="dialog" id="fEmp">
+  <h3 id="dEmpT">Employee</h3>
+  <div class="grid">
+    <div><label>Employee ID <span class="hint">(blank = auto)</span></label><input name="EmpId"></div>
+    <div><label>Full name</label><input name="FullName" required></div>
+    <div><label>Gender</label><select name="Gender"><option>Male</option><option>Female</option><option>Other</option></select></div>
+    <div><label>Date of birth</label><input name="DOB" type="date"></div>
+    <div><label>Phone</label><input name="Phone" inputmode="numeric" maxlength="10"></div>
+    <div><label>Email</label><input name="Email" type="email"></div>
+    <div><label>Store</label><select name="StoreCode" id="eStore" required></select></div>
+    <div><label>Position</label><select name="PositionCode" id="ePos" required></select></div>
+    <div style="grid-column:1/-1"><label>Reporting manager <span class="hint" id="mgrHint"></span></label><select name="ReportingManagerId" id="eMgr"></select></div>
+    <div><label>Joining date</label><input name="JoiningDate" type="date" required></div>
+    <div><label>Employment type</label><select name="EmploymentType"><option>Permanent</option><option>Contract</option><option>Trainee</option></select></div>
+    <div><label>Status</label><select name="Status"><option>Probation</option><option>Confirmed</option><option>Notice Period</option></select></div>
+    <div><label>Probation end <span class="hint">(blank = auto)</span></label><input name="ProbationEndDate" type="date"></div>
+  </div>
+  <div id="reasonBox" class="hidden"><label>Reason for change of store / position / manager</label><input id="reason" placeholder="e.g. Promotion, Transfer"></div>
+  <div class="row-end"><span class="msg" id="m-emp"></span><button value="cancel" formnovalidate>Cancel</button><button class="btn" id="sEmp">Save</button></div>
+</form></dialog>
+
+<dialog id="dImp"><form method="dialog">
+  <h3>Import employees</h3>
+  <p class="sub" id="impInfo"></p>
+  <div id="impErr" class="err-box hidden"></div>
+  <div class="row-end"><span class="msg" id="m-imp"></span><button value="cancel">Close</button><button class="btn" id="goImp">Import</button></div>
+</form></dialog>
+
+<script src="assets/app.js"></script>
+<script>
+const S = guard(['SuperAdmin', 'Admin', 'HR', 'Manager']);
+renderTop('employees');
+const canEdit = S && ['SuperAdmin', 'Admin', 'HR'].includes(S.role);
+if (!canEdit) $('#editBtns').classList.add('hidden');
+let D = null, editing = null, importRows = [];
+const posName = c => (D.positions.find(p => p.PositionCode === c) || {}).PositionName || c;
+const empName = id => (D.employees.find(e => e.EmpId === id) || {}).FullName || id || '—';
+const fmtD = d => d ? d.split('-').reverse().join('-') : '';
+
+async function load() {
+  D = await api('getEmployees');
+  $('#fStore').innerHTML = '<option value="">All</option>' + D.stores.map(s => `<option value="${esc(s.StoreCode)}">${esc(s.StoreCode)} · ${esc(s.StoreName)}</option>`).join('');
+  $('#fPos').innerHTML = '<option value="">All</option>' + D.positions.map(p => `<option value="${esc(p.PositionCode)}">${esc(p.PositionName)}</option>`).join('');
+  draw();
+}
+
+function draw() {
+  const q = $('#q').value.trim().toLowerCase(), st = $('#fStore').value, ps = $('#fPos').value, ss = $('#fStatus').value;
+  const list = D.employees.filter(e =>
+    (ss ? e.Status === ss : e.Status !== 'Exited') && (!st || e.StoreCode === st) && (!ps || e.PositionCode === ps) &&
+    (!q || [e.FullName, e.EmpId, e.Phone].join(' ').toLowerCase().includes(q)));
+  const active = D.employees.filter(e => e.Status !== 'Exited').length;
+  $('#count').textContent = `${active} active employees · showing ${list.length}`;
+  const cls = s => s === 'Confirmed' ? 'yes' : s === 'Exited' ? 'no' : '';
+  $('#rows').innerHTML = list.map(e => `<tr class="click" data-id="${esc(e.EmpId)}"><td><b>${esc(e.EmpId)}</b></td><td>${esc(e.FullName)}</td><td>${esc(posName(e.PositionCode))}</td><td>${esc(e.StoreCode)}</td><td>${esc(empName(e.ReportingManagerId))}</td><td>${fmtD(e.JoiningDate)}</td><td><span class="pill ${cls(e.Status)}">${esc(e.Status)}</span></td></tr>`).join('')
+    || '<tr><td colspan="7" style="color:var(--muted)">No employees found.</td></tr>';
+  if (canEdit) document.querySelectorAll('tr.click').forEach(r => r.onclick = () => openEmp(D.employees.find(e => e.EmpId === r.dataset.id)));
+}
+['q'].forEach(id => $('#' + id).addEventListener('input', draw));
+['fStore', 'fPos', 'fStatus'].forEach(id => $('#' + id).addEventListener('change', draw));
+
+// Manager list: people in the parent position (same store first), else everyone active
+function fillManagers(selected) {
+  const pos = D.positions.find(p => p.PositionCode === $('#ePos').value), store = $('#eStore').value;
+  const others = D.employees.filter(e => e.Status !== 'Exited' && (!editing || e.EmpId !== editing.EmpId));
+  if (!pos || !pos.ParentPositionCode) { $('#eMgr').innerHTML = '<option value="">— Top position, no manager —</option>'; $('#mgrHint').textContent = ''; return; }
+  const inParent = others.filter(e => e.PositionCode === pos.ParentPositionCode);
+  const pick = inParent.filter(e => e.StoreCode === store).concat(inParent.filter(e => e.StoreCode !== store));
+  const rest = others.filter(e => !pick.includes(e));
+  const opt = e => `<option value="${esc(e.EmpId)}">${esc(e.FullName)} · ${esc(posName(e.PositionCode))} · ${esc(e.StoreCode)}</option>`;
+  $('#eMgr').innerHTML = '<option value="">— Select —</option>' + (pick.length ? `<optgroup label="${esc(posName(pos.ParentPositionCode))} (reports-to position)">${pick.map(opt).join('')}</optgroup>` : '') +
+    (rest.length ? `<optgroup label="Others">${rest.map(opt).join('')}</optgroup>` : '');
+  $('#mgrHint').textContent = pick.length ? '' : `(no one is in ${posName(pos.ParentPositionCode)} yet — add them first, or pick someone else)`;
+  if (selected) $('#eMgr').value = selected;
+}
+
+function openEmp(e) {
+  editing = e || null;
+  const f = $('#fEmp');
+  $('#eStore').innerHTML = D.stores.map(s => `<option value="${esc(s.StoreCode)}">${esc(s.StoreCode)} · ${esc(s.StoreName)}</option>`).join('');
+  $('#ePos').innerHTML = [...D.positions].sort((a, b) => a.Level - b.Level).map(p => `<option value="${esc(p.PositionCode)}">${'· '.repeat(Number(p.Level) - 1)}${esc(p.PositionName)}</option>`).join('');
+  [...f.elements].forEach(el => { if (el.name) el.value = (e && e[el.name]) ?? (el.tagName === 'SELECT' && el.options.length ? el.options[0].value : ''); });
+  f.EmpId.readOnly = !!e;
+  fillManagers(e && e.ReportingManagerId);
+  $('#reasonBox').classList.add('hidden'); $('#reason').value = '';
+  $('#dEmpT').textContent = e ? 'Edit ' + e.FullName : 'Add employee'; $('#m-emp').textContent = '';
+  $('#dEmp').showModal();
+}
+['eStore', 'ePos'].forEach(id => $('#' + id).addEventListener('change', () => { fillManagers(); checkMove(); }));
+$('#eMgr').addEventListener('change', checkMove);
+function checkMove() {
+  if (!editing) return;
+  const moved = editing.StoreCode !== $('#eStore').value || editing.PositionCode !== $('#ePos').value || (editing.ReportingManagerId || '') !== $('#eMgr').value;
+  $('#reasonBox').classList.toggle('hidden', !moved);
+}
+$('#add').onclick = () => openEmp(null);
+$('#sEmp').onclick = async ev => {
+  ev.preventDefault(); const f = $('#fEmp'); if (!f.reportValidity()) return;
+  const o = {}; [...f.elements].forEach(el => { if (el.name) o[el.name] = el.value.trim(); });
+  const b = $('#sEmp'); b.disabled = true;
+  try { const r = await api('saveEmployee', { employee: o, reason: $('#reason').value }); $('#dEmp').close(); await load(); if (!editing) alert('Saved as ' + r.empId); }
+  catch (err) { showMsg($('#m-emp'), err.message); }
+  b.disabled = false;
+};
+
+// ── Excel template + import ──
+const COLS = [['EmpId','Employee ID'],['FullName','Full Name'],['Gender','Gender'],['DOB','Date of Birth (DD-MM-YYYY)'],['Phone','Phone'],['Email','Email'],['StoreCode','Store Code'],['PositionCode','Position Code'],['ReportingManagerId','Reporting Manager (Employee ID)'],['JoiningDate','Joining Date (DD-MM-YYYY)'],['EmploymentType','Employment Type'],['Status','Status'],['ProbationEndDate','Probation End Date (DD-MM-YYYY)']];
+$('#tpl').onclick = () => {
+  const wb = XLSX.utils.book_new();
+  const emp = XLSX.utils.aoa_to_sheet([COLS.map(c => c[1]), ['', 'Example Name', 'Male', '15-06-1995', '9876543210', '', D.stores[0]?.StoreCode || '', D.positions[0]?.PositionCode || '', '', '01-11-2026', 'Permanent', 'Probation', '']]);
+  emp['!cols'] = COLS.map(() => ({ wch: 20 }));
+  XLSX.utils.book_append_sheet(wb, emp, 'Employees');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Store Code', 'Store Name'], ...D.stores.map(s => [s.StoreCode, s.StoreName])]), 'Stores (reference)');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Position Code', 'Position Name', 'Reports to'], ...D.positions.map(p => [p.PositionCode, p.PositionName, posName(p.ParentPositionCode)])]), 'Positions (reference)');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Rules'], ['Leave Employee ID blank to auto-number.'], ['Reporting Manager = Employee ID of the manager. The manager can be another row in this same file.'], ['Add managers before their team where possible. Top position needs no manager.'], ['Status: Probation / Confirmed / Notice Period. Employment Type: Permanent / Contract / Trainee.'], ['Delete the example row before importing.']]), 'Read Me');
+  XLSX.writeFile(wb, 'Employee_Import_Template.xlsx');
+};
+$('#imp').onclick = () => $('#file').click();
+$('#file').onchange = async () => {
+  const file = $('#file').files[0]; if (!file) return;
+  const wb = XLSX.read(await file.arrayBuffer(), { cellDates: false });
+  const ws = wb.Sheets['Employees'] || wb.Sheets[wb.SheetNames[0]];
+  let aoa = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '' });
+  const hIdx = aoa.findIndex(r => r.some(c => /full name/i.test(String(c))));
+  if (hIdx < 0) { alert('Could not find a "Full Name" column. Use the import template.'); return; }
+  const head = aoa[hIdx].map(h => String(h).toLowerCase());
+  const map = COLS.map(([k, label]) => [k, head.findIndex(h => h.startsWith(label.toLowerCase().split(' (')[0]))]);
+  importRows = aoa.slice(hIdx + 1).filter(r => r.some(c => String(c).trim())).map(r => { const o = {}; map.forEach(([k, i]) => o[k] = i >= 0 ? r[i] : ''); return o; })
+    .filter(r => r.FullName && r.FullName !== 'Example Name');
+  $('#impInfo').textContent = `${importRows.length} employees found in "${file.name}". Everything is checked first; if any row has a problem, nothing is imported.`;
+  $('#impErr').classList.add('hidden'); $('#m-imp').textContent = ''; $('#goImp').disabled = !importRows.length;
+  $('#file').value = ''; $('#dImp').showModal();
+};
+$('#goImp').onclick = async ev => {
+  ev.preventDefault(); const b = $('#goImp'); b.disabled = true; b.textContent = 'Importing…';
+  try { const r = await api('importEmployees', { rows: importRows }); showMsg($('#m-imp'), r.message, true); await load(); }
+  catch (err) { $('#impErr').textContent = err.message; $('#impErr').classList.remove('hidden'); b.disabled = false; }
+  b.textContent = 'Import';
+};
+
+if (S) load().catch(e => alert(e.message));
+</script></body></html>

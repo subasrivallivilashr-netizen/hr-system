@@ -52,3 +52,8 @@ dialog form{padding:20px}dialog h3{margin:0 0 8px}
 .legend{display:flex;gap:14px;font-size:12px;color:var(--muted);margin-bottom:8px;flex-wrap:wrap}
 .legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:-1px}
 .under{color:var(--err)}.over{color:#b26a00}
+.filters{display:flex;gap:8px;flex-wrap:wrap;align-items:end;margin-bottom:12px}.filters>div{min-width:150px;flex:1}
+.stat{color:var(--muted);font-size:13px}
+.err-box{white-space:pre-wrap;background:#fde8e6;color:var(--err);border-radius:8px;padding:10px;margin-top:10px;font-size:13px;max-height:220px;overflow:auto}
+.hint{font-weight:400;color:var(--muted);font-size:12px}
+tr.click{cursor:pointer}tr.click:hover td{background:#f7f9fc}

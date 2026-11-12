@@ -170,18 +170,48 @@ const NAV = [
   { key: 'settings', label: 'Settings', href: 'settings.html', roles: ['SuperAdmin', 'Admin'] }
 ];
 const lifecycleLabel = () => hasMod('ONBOARDING') && hasMod('EXIT') ? 'Onboarding & exit' : hasMod('ONBOARDING') ? 'Onboarding' : 'Exit';
+// Line icons for the sidebar (24px, stroke = currentColor)
+const SB_ICONS = {
+  People: '<circle cx="9" cy="8" r="3.2"/><path d="M3 20c.6-3.4 3-5 6-5s5.4 1.6 6 5"/><path d="M16 4.5a3 3 0 0 1 0 6M18 14.5c1.6.7 2.7 2.4 3 5"/>',
+  Hiring: '<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M9 7V5a1.5 1.5 0 0 1 1.5-1.5h3A1.5 1.5 0 0 1 15 5v2M3 12.5h18"/>',
+  Performance: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r=".9" fill="currentColor"/>',
+  Documents: '<path d="M5 4.5A1.5 1.5 0 0 1 6.5 3H19v15H6.5A1.5 1.5 0 0 0 5 19.5z"/><path d="M5 19.5A1.5 1.5 0 0 0 6.5 21H19M9 7.5h6M9 11h6"/>',
+  settings: '<circle cx="12" cy="12" r="3"/><path d="M12 2.8v2.4M12 18.8v2.4M2.8 12h2.4M18.8 12h2.4M5.5 5.5l1.7 1.7M16.8 16.8l1.7 1.7M5.5 18.5l1.7-1.7M16.8 7.2l1.7-1.7"/>',
+  chev: '<path d="m6 9 6 6 6-6"/>',
+  out: '<path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 16l-4-4 4-4M6 12h10"/>'
+};
+const sbIcon = (k, size = 18) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${SB_ICONS[k] || ''}</svg>`;
+function sbOpenGroups() { try { return JSON.parse(sessionStorage.getItem('hr_sb_open') || '[]'); } catch { return []; } }
+function sbSaveGroups(list) { try { sessionStorage.setItem('hr_sb_open', JSON.stringify(list)); } catch {} }
+
+// Sidebar (design C): group headings with icons, the current group open, others fold away
 function renderTop(active, companyName) {
   const s = Session.get(); if (!s) return;
   const lbl = i => i.key === 'lifecycle' ? lifecycleLabel() : i.key === 'settings' && s.role !== 'SuperAdmin' ? 'Users' : i.label;
-  const link = i => `<a href="${i.href}" class="nl ${i.key === active ? 'on' : ''}" ${i.key === active ? 'aria-current="page"' : ''}>${lbl(i)}</a>`;
-  const html = NAV.map(g => {
-    if (!g.items) return g.roles.includes(s.role) ? `<div class="sb-g">Admin</div>${link(g)}` : '';
+  const remembered = sbOpenGroups();
+  const html = NAV.map((g, gi) => {
+    if (!g.items) {                                   // single page (Settings / Users): a direct link
+      if (!g.roles.includes(s.role)) return '';
+      const on = g.key === active;
+      return `<a href="${g.href}" class="sb-h sb-link ${on ? 'on' : ''}" ${on ? 'aria-current="page"' : ''}>${sbIcon(g.key)}<span>${lbl(g)}</span></a>`;
+    }
     const items = g.items.filter(i => i.roles.includes(s.role) && (!i.mod || hasMod(i.mod))); if (!items.length) return '';
-    return `<div class="sb-g">${g.label}</div>${items.map(link).join('')}`;
+    const cur = items.some(i => i.key === active), open = cur || remembered.includes(g.label);
+    return `<div class="sb-grp ${open ? 'open' : ''} ${cur ? 'cur' : ''}">
+      <button type="button" class="sb-h" aria-expanded="${open}" aria-controls="sbg${gi}" data-g="${esc(g.label)}">${sbIcon(g.label)}<span>${g.label}</span><em>${sbIcon('chev', 14)}</em></button>
+      <div class="sb-items" id="sbg${gi}">${items.map(i => `<a href="${i.href}" class="nl ${i.key === active ? 'on' : ''}" ${i.key === active ? 'aria-current="page"' : ''}>${lbl(i)}</a>`).join('')}</div></div>`;
   }).join('');
   const name = esc(companyName || s.company || 'HR System');
-  $('#top').innerHTML = `${s.logo ? `<div class="sb-logo"><img src="${esc(s.logo)}" alt="${name} logo"></div>` : ''}<div class="sb-brand"><i></i><b id="co">${name}</b></div><nav class="nav" aria-label="Main menu">${html}</nav>
-    <div class="sb-foot"><div class="sb-user">${esc(s.name)}<span>${esc(s.role === 'SuperAdmin' ? 'C&B Super Admin' : s.role)}</span></div><button id="out">Sign out</button>${CREDIT_HTML}</div>`;
+  const initials = String(s.name || '?').split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase();
+  $('#top').innerHTML = `${s.logo ? `<div class="sb-logo"><img src="${esc(s.logo)}" alt="${name} logo"></div>` : ''}<div class="sb-brand"><i></i><b id="co">${name}</b></div>
+    <nav class="nav" aria-label="Main menu">${html}</nav>
+    <div class="sb-foot"><div class="sb-user"><span class="sb-av" aria-hidden="true">${esc(initials)}</span><div class="sb-who"><b>${esc(s.name)}</b><small>${esc(s.role === 'SuperAdmin' ? 'C&B Super Admin' : s.role)}</small></div>
+      <button type="button" id="out" class="sb-out" aria-label="Sign out" title="Sign out">${sbIcon('out', 17)}</button></div>${CREDIT_HTML}</div>`;
+  document.querySelectorAll('#top .sb-grp > .sb-h').forEach(b => b.onclick = () => {
+    const grp = b.parentElement, open = !grp.classList.contains('open');
+    grp.classList.toggle('open', open); b.setAttribute('aria-expanded', open);
+    const keep = sbOpenGroups().filter(x => x !== b.dataset.g); if (open) keep.push(b.dataset.g); sbSaveGroups(keep);
+  });
   document.body.classList.add('has-side');
   $('#out').onclick = () => { Session.clear(); location.href = 'index.html'; };
   if (!$('#mtop')) {                                // phone: top strip with a menu button that slides the sidebar in

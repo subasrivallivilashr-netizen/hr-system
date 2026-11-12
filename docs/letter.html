@@ -21,7 +21,7 @@ body{background:#e9ecf1}.bar{position:sticky;top:0;z-index:5;background:#fff;bor
 <script src="assets/app.js"></script>
 <script src="assets/letter.js"></script>
 <script>
-const S = guard(['SuperAdmin', 'Admin', 'HR']);
+const S = guard(['SuperAdmin', 'Admin', 'HR'], 'LETTERS');
 const qs = new URLSearchParams(location.search), type = qs.get('type'), ref = qs.get('ref'), no = qs.get('no');
 let L = null, inputs = {}, issued = null;
 const KNOWN_LATER = ['LetterNo', 'SalaryTable'];

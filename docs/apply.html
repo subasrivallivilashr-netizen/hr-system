@@ -44,6 +44,7 @@ async function init() {
   try {
     const d = await api('getApplyForm');
     if (d.companyName) { $('#co').textContent = d.companyName + ' — Job Application'; document.title = d.companyName + ' — Apply'; }
+    if (d.closed) { $('#f').innerHTML = '<h2>Applications are closed</h2><p class="sub">We are not taking applications online right now. Please contact the store.</p>'; return; }
     FORM = d.form; CTX = { positions: d.positions, stores: d.stores, lists: d.lists };
     $('#qs').innerHTML = formSections(FORM, {}, CTX, { markRequired: true });
     UPLOADS = d.uploads || []; renderUploads();

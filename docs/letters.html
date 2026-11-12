@@ -60,10 +60,14 @@
 <script src="assets/app.js"></script>
 <script src="assets/letter.js"></script>
 <script>
-const S = guard(['SuperAdmin', 'Admin', 'HR']);
+const S = guard(['SuperAdmin', 'Admin', 'HR'], 'LETTERS');
 renderTop('letters');
-const canBrand = S && ['SuperAdmin', 'Admin'].includes(S.role);
+const canBrand = S && S.role === 'SuperAdmin';   // letterhead, branding and templates: C&B only
 let D = null, brand = {}, curT = null, REG = [];
+if (S && !canBrand) {      // HR / Admin: salary components and the letter register only
+  ['brand', 'tpl'].forEach(t => { document.querySelector(`#tabs button[data-t="${t}"]`).classList.add('hidden'); $('#t-' + t).classList.add('hidden'); });
+  document.querySelectorAll('#tabs button').forEach(x => x.classList.toggle('on', x.dataset.t === 'sal')); $('#t-sal').classList.remove('hidden');
+}
 const SAMPLE = { CompanyName: 'Your Company', CompanyAddress: '', SignatoryName: '', SignatoryDesignation: '', Today: '12 November 2026', ProbationDays: '90',
   Salutation: 'Ms.', Name: 'Priya Shetty', FirstName: 'Priya', EmpId: 'DT-00153', AppNo: 'APP-2026-0001', Phone: '9876543210', Email: 'priya@example.com', Address: '12 MG Road', CityState: 'Belagavi, Karnataka',
   Position: 'Sales Executive', Department: 'Sales', StoreName: 'Main Showroom', StoreCity: 'Belagavi', ReportingManager: 'Suresh Kumar', ReportingManagerPosition: 'Section Incharge',
@@ -88,7 +92,7 @@ async function load() {
   $('[data-b=BrandFont]').innerHTML = Object.keys(LETTER_FONTS).map(f => `<option>${f}</option>`).join('');
   document.querySelectorAll('[data-b]').forEach(i => { if (brand[i.dataset.b]) i.value = brand[i.dataset.b]; i.disabled = !canBrand; });
   ['logoF', 'sigF', 'saveB'].forEach(i => $('#' + i).disabled = !canBrand);
-  $('#roNote').textContent = canBrand ? '' : '(Only Admin can change these.)';
+  $('#roNote').textContent = canBrand ? '' : '(Set up by C&B.)';
   showImg('logo', brand.BrandLogo); showImg('sig', brand.BrandSignature);
   drawBrand(); drawTList(); drawSal();
 }

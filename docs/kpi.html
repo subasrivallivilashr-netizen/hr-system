@@ -116,7 +116,7 @@
 
 <script src="assets/app.js"></script>
 <script>
-const S = guard(['SuperAdmin', 'Admin', 'HR', 'Manager']);
+const S = guard(['SuperAdmin', 'Admin', 'HR', 'Manager'], 'KPI');
 renderTop('kpi');
 const canEdit = S && ['SuperAdmin', 'Admin', 'HR'].includes(S.role);
 if (!canEdit) $('#impBtns').classList.add('hidden');

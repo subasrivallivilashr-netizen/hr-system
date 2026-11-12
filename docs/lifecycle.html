@@ -49,9 +49,17 @@
 <script src="assets/files.js"></script>
 <input type="file" id="kFile" class="hidden" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png">
 <script>
-const S = guard(['SuperAdmin', 'Admin', 'HR']);
+const S = guard(['SuperAdmin', 'Admin', 'HR'], ['ONBOARDING', 'EXIT']);
 renderTop('lifecycle');
-let D = null, tab = 'Onboarding', cur = null;
+let D = null, tab = hasMod('ONBOARDING') ? 'Onboarding' : 'Exit', cur = null;
+if (S) {   // show only the enabled checklists (Settings → Modules)
+  ['Onboarding', 'Exit'].forEach(k => {
+    const on = hasMod(k.toUpperCase());
+    document.querySelector(`#tabs button[data-t="${k}"]`).classList.toggle('hidden', !on);
+    [...document.querySelectorAll('#tKind option')].filter(o => o.textContent === k && !on).forEach(o => o.remove());
+  });
+  document.querySelectorAll('#tabs button').forEach(x => x.classList.toggle('on', x.dataset.t === tab));
+}
 const fmtD = d => d ? String(d).slice(0, 10).split('-').reverse().join('-') : '';
 const pName = c => (D.positions.find(p => p.PositionCode === c) || {}).PositionName || c;
 const emp = id => D.employees.find(e => e.EmpId === id) || {};

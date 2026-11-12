@@ -118,7 +118,7 @@
 <script src="assets/files.js"></script>
 <script src="assets/form.js"></script>
 <script>
-const S = guard(['SuperAdmin', 'Admin', 'HR']);
+const S = guard(['SuperAdmin', 'Admin', 'HR'], 'HIRING');
 renderTop('hiring');
 const isAdmin = S && ['SuperAdmin', 'Admin'].includes(S.role);
 const BASE = location.href.replace(/[^/]*([?#].*)?$/, '');
@@ -192,7 +192,8 @@ function incompleteNote(c) {
 function openCand(a) {
   curApp = a; const c = cand(a), s = sched(a);
   $('#cT').innerHTML = `<span class="who">${avatar(c.AppNo, c.Name, 40)}<span>${esc(c.Name)} — ${esc(pName(c.PositionCode))}</span></span>`;
-  docBox($('#cDocs'), c.AppNo, { onChange: () => { $('#cT').querySelector('.av').outerHTML = avatar(c.AppNo, c.Name, 40); drawPipeline(); } });
+  $('#cDocs').closest('.box').classList.toggle('hidden', !hasMod('FILES'));
+  if (hasMod('FILES')) docBox($('#cDocs'), c.AppNo, { onChange: () => { $('#cT').querySelector('.av').outerHTML = avatar(c.AppNo, c.Name, 40); drawPipeline(); } });
   $('#cS').innerHTML = `${esc(c.AppNo)} · applied ${fmtD(c.Date)} (${daysAgo(c.Date)} days ago) · ${pill(c.Status)}${c.IsDuplicatePhone === 'Yes' ? ' · <span class="dup">applied before with this phone</span>' : ''}${incompleteNote(c)}`;
   const stName = code => (D.stores.find(x => x.StoreCode === code) || {}).StoreName || code;
   const ans = f => {
@@ -212,7 +213,7 @@ function openCand(a) {
     'Shortlisted': [B('Log 1st call', 'call:1', 'btn'), B('Schedule interview', 'call:3'), B('Hold', 'st:Hold'), B('Reject', 'st:Rejected', 'btn-err')],
     '1st Call Done': [B('Log 2nd call', 'call:2', 'btn'), B('Schedule interview', 'call:3'), B('Hold', 'st:Hold'), B('Reject', 'st:Rejected', 'btn-err')],
     '2nd Call Done': [B('Schedule interview', 'call:3', 'btn'), B('Hold', 'st:Hold'), B('Reject', 'st:Rejected', 'btn-err')],
-    'Interview Scheduled': [B('Open interview', 'go:interview', 'btn'), B('Interview call letter', 'go:callletter'), B('Reschedule', 'call:3'), B('Hold', 'st:Hold'), B('Reject', 'st:Rejected', 'btn-err')],
+    'Interview Scheduled': [B('Open interview', 'go:interview', 'btn'), (hasMod('LETTERS') ? B('Interview call letter', 'go:callletter') : ''), B('Reschedule', 'call:3'), B('Hold', 'st:Hold'), B('Reject', 'st:Rejected', 'btn-err')],
     'Interviewed': [B('Open interview', 'go:interview', 'btn')],
     'Hold': [B('Reactivate', 'st:New', 'btn'), B('Reject', 'st:Rejected', 'btn-err')],
     'Rejected': [B('Re-engage (back to New)', 'st:New', 'btn')]
@@ -377,6 +378,7 @@ function openOffer(a) {
     };
   }
   salaryEditor($('#oSal'), a);
+  $('#oLetter').classList.toggle('hidden', !hasMod('LETTERS'));
   $('#oLetter').onclick = () => window.open(`letter.html?type=offer&ref=${encodeURIComponent(a)}`, '_blank');
   $('#oLetterNote').textContent = 'Enter the salary first. Fill notice period and expected joining date, then Save details.';
   $('#m-o').textContent = '';

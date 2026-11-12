@@ -97,11 +97,25 @@ function askReason({ title, intro = '', list, reasonLabel = 'Reason', noteLabel 
 
 const CREDIT_HTML = '<span class="credit">Powered by <i></i><b>C&amp;B</b></span>';
 
-function guard(roles) {
+// mods: module key or list (any one enabled is enough) — see Settings → Modules
+function guard(roles, mods) {
   const s = Session.get();
   if (!s) { location.href = 'index.html'; return null; }
   if (roles && !roles.includes(s.role)) { alert('You do not have access to this page.'); location.href = 'index.html'; return null; }
+  if (mods && !hasMod(mods)) { moduleOffPage(); return null; }
   return s;
+}
+function hasMod(mods) {
+  const s = Session.get(), on = s && Array.isArray(s.modules) ? s.modules : null;
+  if (!on) return true;                                 // older session without the list: let the server decide
+  return [].concat(mods).some(m => on.includes(m));
+}
+function moduleOffPage() {
+  const main = document.querySelector('main'); if (!main) return;
+  [...main.children].forEach(c => c.classList.add('hidden'));
+  const d = document.createElement('div'); d.className = 'card'; d.style.maxWidth = '560px';
+  d.innerHTML = '<h2>Not enabled</h2><p class="sub">This part of the app is not enabled for your company. Contact C&amp;B if you need it.</p><a href="org.html">Go to Organisation</a>';
+  main.prepend(d);
 }
 
 function $(sel, root = document) { return root.querySelector(sel); }
@@ -114,30 +128,40 @@ const NAV = [
   { label: 'People', items: [
     { key: 'org', label: 'Organisation', href: 'org.html', roles: ALL },
     { key: 'employees', label: 'Employees', href: 'employees.html', roles: ALL },
-    { key: 'roles', label: 'Roles & responsibilities', href: 'roles.html', roles: ALL }] },
+    { key: 'roles', label: 'Roles & responsibilities', href: 'roles.html', roles: ALL, mod: 'ROLES' }] },
   { label: 'Hiring', items: [
-    { key: 'hiring', label: 'Hiring pipeline', href: 'hiring.html', roles: HRR },
-    { key: 'lifecycle', label: 'Onboarding & exit', href: 'lifecycle.html', roles: HRR }] },
+    { key: 'hiring', label: 'Hiring pipeline', href: 'hiring.html', roles: HRR, mod: 'HIRING' },
+    { key: 'lifecycle', label: 'Onboarding & exit', href: 'lifecycle.html', roles: HRR, mod: ['ONBOARDING', 'EXIT'] }] },
   { label: 'Performance', items: [
-    { key: 'kpi', label: 'KPIs', href: 'kpi.html', roles: ALL },
-    { key: 'reports', label: 'Reports', href: 'reports.html', roles: ALL }] },
+    { key: 'kpi', label: 'KPIs', href: 'kpi.html', roles: ALL, mod: 'KPI' },
+    { key: 'reports', label: 'Reports', href: 'reports.html', roles: ALL, mod: 'REPORTS' }] },
   { label: 'Documents', items: [
-    { key: 'policies', label: 'Policies', href: 'policies.html', roles: ALL },
-    { key: 'letters', label: 'Letters', href: 'letters.html', roles: HRR }] },
+    { key: 'policies', label: 'Policies', href: 'policies.html', roles: ALL, mod: 'POLICIES' },
+    { key: 'letters', label: 'Letters', href: 'letters.html', roles: HRR, mod: 'LETTERS' }] },
   { key: 'settings', label: 'Settings', href: 'settings.html', roles: ['SuperAdmin', 'Admin'] }
 ];
+const lifecycleLabel = () => hasMod('ONBOARDING') && hasMod('EXIT') ? 'Onboarding & exit' : hasMod('ONBOARDING') ? 'Onboarding' : 'Exit';
 function renderTop(active, companyName) {
   const s = Session.get(); if (!s) return;
+  const lbl = i => i.key === 'lifecycle' ? lifecycleLabel() : i.key === 'settings' && s.role !== 'SuperAdmin' ? 'Users' : i.label;
   const html = NAV.map((g, gi) => {
-    if (!g.items) return g.roles.includes(s.role) ? `<a href="${g.href}" class="nl ${g.key === active ? 'on' : ''}">${g.label}</a>` : '';
-    const items = g.items.filter(i => i.roles.includes(s.role)); if (!items.length) return '';
+    if (!g.items) return g.roles.includes(s.role) ? `<a href="${g.href}" class="nl ${g.key === active ? 'on' : ''}">${lbl(g)}</a>` : '';
+    const items = g.items.filter(i => i.roles.includes(s.role) && (!i.mod || hasMod(i.mod))); if (!items.length) return '';
     const on = items.some(i => i.key === active);
     return `<div class="ng"><button type="button" class="nl ${on ? 'on' : ''}" data-g="${gi}" aria-haspopup="true" aria-expanded="false">${g.label} <span class="car">▾</span></button>
-      <div class="dd">${items.map(i => `<a href="${i.href}" class="${i.key === active ? 'on' : ''}">${i.label}</a>`).join('')}</div></div>`;
+      <div class="dd">${items.map(i => `<a href="${i.href}" class="${i.key === active ? 'on' : ''}">${lbl(i)}</a>`).join('')}</div></div>`;
   }).join('');
   $('#top').innerHTML = `<b id="co">${esc(companyName || s.company || 'HR System')}</b><nav class="nav">${html}</nav>
     <span class="who">${esc(s.name)} · ${esc(s.role)}</span><button id="out">Sign out</button>`;
   $('#out').onclick = () => { Session.clear(); location.href = 'index.html'; };
+  if (!renderTop.checked) {                         // pick up module changes made by C&B since login (once per page)
+    renderTop.checked = true;
+    api('me').then(m => { const cur = Session.get(); if (!cur || !m.modules) return;
+      const changed = JSON.stringify(cur.modules || null) !== JSON.stringify(m.modules);
+      cur.modules = m.modules; Session.set(cur);
+      if (changed) location.reload();
+    }).catch(() => {});
+  }
   if (!$('#appFoot')) { const f = document.createElement('footer'); f.id = 'appFoot'; f.className = 'app-foot noprint'; f.innerHTML = CREDIT_HTML; document.body.appendChild(f); }
   const closeAll = except => document.querySelectorAll('.ng.open').forEach(n => { if (n !== except) { n.classList.remove('open'); n.querySelector('.nl').setAttribute('aria-expanded', 'false'); } });
   document.querySelectorAll('.ng > .nl').forEach(b => b.onclick = e => {

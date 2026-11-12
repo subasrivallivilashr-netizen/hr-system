@@ -68,6 +68,11 @@ export class Hub {
         if (!user) return json({ ok: false, error: 'Not logged in or session expired' }, 401);
         if (handler.roles && !handler.roles.includes(user.r)) return json({ ok: false, error: 'Not allowed for your role' }, 403);
       }
+      const need = moduleFor(action, body);
+      if (need) {
+        const on = await this.modules();
+        if (!need.some(m => on.includes(m))) return json({ ok: false, error: 'This part of the app is not enabled for your company. Contact C&B to enable it.', moduleOff: need }, 403);
+      }
       const run = () => handler.fn.call(this, body, user);
       let result;
       if (handler.write && body.reqId) {
@@ -368,7 +373,8 @@ export class Hub {
     const company0 = await this.companyMap();
     const form = await this.applyForm();
     c = checkAnswers(form, c);                        // types, dropdown values; throws on a bad value
-    if (!company0.UploadUrl) files = [];
+    const filesOn = company0.UploadUrl && (await this.modules()).includes('FILES');
+    if (!filesOn) files = [];
     const gaps = await this.candidateGaps(c, form, files.map(f => String(f.docType).toUpperCase()));
     let incomplete = false;
     if (gaps.length) {
@@ -411,6 +417,13 @@ export class Hub {
       Source: c.Source, Stage: stage, RejectionDate: new Date().toISOString().slice(0, 10), RejectedBy: by, Remarks: remarks || '', Reason: reason || '' }]);
   }
 
+  // Enabled modules (Settings → Modules). Not set yet = everything on, so older setups keep working.
+  async modules() {
+    const v = String((await this.companyMap()).Modules ?? '').trim();
+    if (!v) return Object.keys(MODULES);
+    return v === 'NONE' ? [] : v.split(',').map(x => x.trim()).filter(m => MODULES[m]);
+  }
+
   // ── Apply form questions & editable lists (Settings sheet) ──
   async formTabs() {
     await this.ensureTab('Settings', 'Apply_Form', FORM_HEAD);
@@ -440,7 +453,7 @@ export class Hub {
   async candidateGaps(c, form, uploadedTypes) {
     const miss = form.filter(f => f.Setting === 'Mandatory' && !FORM_LOCKED.includes(f.Code) && !String(c[f.Code] ?? '').trim()).map(f => f.Label);
     const company = await this.companyMap();
-    if (company.UploadUrl) {
+    if (company.UploadUrl && (await this.modules()).includes('FILES')) {
       const types = uploadedTypes || (await this.read('Organisation', 'Files').catch(() => [])).filter(x => x.Ref === c.AppNo && x.Status !== 'Deleted').map(x => x.DocType);
       (await this.docTypes()).filter(d => CANDIDATE_FORM_DOCS.includes(d.Code) && d.CandidateForm === 'Mandatory' && d.Active !== 'No' && !types.includes(d.Code)).forEach(d => miss.push(d.Name));
     }
@@ -686,23 +699,23 @@ const ACTIONS = {
         throw new Error('Invalid username or password');
       }
       const company = await this.companyMap();
-      return { token: await this.makeSession(u), role: u.Role, fullName: u.FullName, stores: u.StoreCodes, empId: u.EmpId || '', company: company.CompanyName || '' };
+      return { token: await this.makeSession(u), role: u.Role, fullName: u.FullName, stores: u.StoreCodes, empId: u.EmpId || '', company: company.CompanyName || '', modules: await this.modules() };
     }
   },
 
-  me: { auth: true, fn: async (p, user) => ({ username: user.u, role: user.r, fullName: user.n }) },
+  me: { auth: true, fn: async function (p, user) { return { username: user.u, role: user.r, fullName: user.n, modules: await this.modules(), company: (await this.companyMap()).CompanyName || '' }; } },
 
   // ── Settings ──
   getSettings: {
     auth: true, roles: [ROLES.SUPER, ROLES.ADMIN],
-    fn: async function () {
+    fn: async function (p, user) {
       const company = {};
       (await this.read('Settings', 'Company')).forEach(r => company[r.Key] = r.Value);
       const stores = (await this.read('Settings', 'Stores')).map(clean);
       await this.ensureColumns('Settings', 'Users', ['EmpId']);
       const users = (await this.read('Settings', 'Users')).map(u => ({
         Username: u.Username, Role: u.Role, FullName: u.FullName, StoreCodes: u.StoreCodes, Active: u.Active, CreatedAt: u.CreatedAt, EmpId: u.EmpId || ''
-      }));
+      })).filter(u => user.r === ROLES.SUPER || u.Role !== ROLES.SUPER);           // C&B's login is not shown to the client
       const employees = (await this.read('Organisation', 'Employees')).filter(e => !GONE(e.Status))
         .map(e => ({ EmpId: e.EmpId, FullName: e.FullName, PositionCode: e.PositionCode, StoreCode: e.StoreCode }));
       return { company, stores, users, employees };
@@ -710,7 +723,7 @@ const ACTIONS = {
   },
 
   saveCompany: {
-    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN], write: true,
+    auth: true, roles: [ROLES.SUPER], write: true,
     fn: async function (p, user) {
       const allowed = ['InterviewPassPct', 'CompanyName', 'EmpIdPrefix', 'EmpIdDigits', 'EmpIdNextNumber', 'EmpIdPerStore', 'SameStructureAllStores', 'ProbationDays'];
       if (user.r === ROLES.SUPER) allowed.push('StoreLimit');
@@ -726,7 +739,7 @@ const ACTIONS = {
   },
 
   saveStore: {
-    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN], write: true,
+    auth: true, roles: [ROLES.SUPER], write: true,
     fn: async function (p, user) {
       const s = p.store || {};
       if (!s.StoreCode || !s.StoreName) throw new Error('Store code and name are required');
@@ -753,11 +766,13 @@ const ACTIONS = {
       const u = p.user || {};
       const username = String(u.Username || '').trim().toLowerCase();
       if (!username) throw new Error('Username is required');
-      const validRoles = user.r === ROLES.SUPER ? Object.values(ROLES) : [ROLES.ADMIN, ROLES.HR, ROLES.MANAGER];
-      if (u.Role && !validRoles.includes(u.Role)) throw new Error('You cannot assign the role ' + u.Role);
       const users = await this.read('Settings', 'Users');
       const exists = users.find(x => String(x.Username).toLowerCase() === username);
-      if (exists && exists.Role === ROLES.SUPER && user.r !== ROLES.SUPER) throw new Error('Only a Super Admin can change a Super Admin');
+      if (exists && exists.Role === ROLES.SUPER) {
+        // The single C&B Super Admin: only its own name / password can change, never its role or active state
+        if (user.r !== ROLES.SUPER) throw new Error('This user cannot be changed');
+        u.Role = ROLES.SUPER; u.Active = 'Yes';
+      } else if (u.Role && ![ROLES.ADMIN, ROLES.HR, ROLES.MANAGER].includes(u.Role)) throw new Error('You cannot assign the role ' + u.Role);
       await this.ensureColumns('Settings', 'Users', ['EmpId']);
       const changes = { FullName: u.FullName, Role: u.Role, StoreCodes: u.StoreCodes, Active: u.Active, EmpId: u.EmpId };
       Object.keys(changes).forEach(k => changes[k] === undefined && delete changes[k]);
@@ -1222,13 +1237,14 @@ const ACTIONS = {
   // Public: data for the candidate registration form
   getApplyForm: {
     fn: async function () {
-      const company = await this.companyMap();
+      const company = await this.companyMap(), mods = await this.modules();
+      if (!mods.includes('HIRING')) return { closed: true, companyName: company.CompanyName || '' };
       const positions = (await this.read('Organisation', 'Positions')).filter(p => p.Active !== 'No' && p.ParentPositionCode)
         .map(p => ({ PositionCode: p.PositionCode, PositionName: p.PositionName, StoreCode: p.StoreCode }));
       const stores = (await this.read('Settings', 'Stores')).filter(s => s.Active !== 'No')
         .map(s => ({ StoreCode: s.StoreCode, StoreName: s.StoreName, Type: s.Type }));
       let uploads = [];
-      if (company.UploadUrl) uploads = (await this.docTypes()).filter(d => CANDIDATE_FORM_DOCS.includes(d.Code) && d.CandidateForm !== 'Hidden' && d.Active !== 'No')
+      if (company.UploadUrl && mods.includes('FILES')) uploads = (await this.docTypes()).filter(d => CANDIDATE_FORM_DOCS.includes(d.Code) && d.CandidateForm !== 'Hidden' && d.Active !== 'No')
         .map(d => ({ Code: d.Code, Name: d.Name, Required: d.CandidateForm === 'Mandatory' }));
       const form = (await this.applyForm()).filter(f => f.Setting !== 'Hidden')
         .map(f => ({ Code: f.Code, Label: f.Label, Section: f.Section, Type: f.Type, Options: f.Options, Hint: f.Hint, Required: f.Setting === 'Mandatory' }));
@@ -1536,11 +1552,12 @@ const ACTIONS = {
       await this.letterTabs();
       const candSal = (await this.read('Organisation', 'Salary')).find(x => x.Ref === c.AppNo);
       if (candSal) await this.upsertMany('Organisation', 'Salary', ['Ref'], [{ ...clean(candSal), Ref: e.EmpId, EffectiveFrom: e.JoiningDate, UpdatedAt: now }]);
-      try { await this.moveCandidateFiles(c.AppNo, e.EmpId); } catch (err) { /* never block joining */ }
-      const ob = await this.startChecklist('Onboarding', e, null);
+      if ((await this.modules()).includes('FILES')) try { await this.moveCandidateFiles(c.AppNo, e.EmpId); } catch (err) { /* never block joining */ }
+      const obOn = (await this.modules()).includes('ONBOARDING');
+      const ob = obOn ? await this.startChecklist('Onboarding', e, null) : null;
       await this.log('Hiring', c.AppNo, 'Joined', `Employee ${e.EmpId}`, user.u);
       await this.log('Organisation', e.EmpId, 'Employee added (joined)', `${e.FullName} from ${c.AppNo}`, user.u);
-      return { message: `Joined as ${e.EmpId}. Onboarding started.`, empId: e.EmpId, recordId: ob.RecordId };
+      return { message: `Joined as ${e.EmpId}.${obOn ? ' Onboarding started.' : ''}`, empId: e.EmpId, recordId: ob ? ob.RecordId : '' };
     }
   },
 
@@ -1712,7 +1729,7 @@ const ACTIONS = {
   },
 
   saveBranding: {
-    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN], write: true,
+    auth: true, roles: [ROLES.SUPER], write: true,
     fn: async function (p, user) {
       const vals = {};
       for (const k of BRAND_KEYS) if (p.values && k in p.values) {
@@ -1727,7 +1744,7 @@ const ACTIONS = {
   },
 
   saveLetterTemplate: {
-    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR], write: true,
+    auth: true, roles: [ROLES.SUPER], write: true,
     fn: async function (p, user) {
       await this.letterTabs();
       const type = String(p.type || '').trim();
@@ -1913,7 +1930,7 @@ const ACTIONS = {
     fn: async function (p, user) {
       const c = await this.companyMap();
       const out = { docTypes: await this.docTypes(), configured: !!c.UploadUrl, retentionDays: Number(c.FileRetentionDays || 90) };
-      if ([ROLES.SUPER, ROLES.ADMIN].includes(user.r)) {
+      if (user.r === ROLES.SUPER) {
         let secret = c.UploadSecret;
         if (!secret) { secret = randomHex(16); await this.setCompany({ UploadSecret: secret }); }
         Object.assign(out, { uploadUrl: c.UploadUrl || '', uploadSecret: secret, folderId: '' });
@@ -1923,7 +1940,7 @@ const ACTIONS = {
   },
 
   saveStorageSettings: {
-    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN], write: true,
+    auth: true, roles: [ROLES.SUPER], write: true,
     fn: async function (p, user) {
       const url = String(p.uploadUrl || '').trim();
       if (url && !/^https:\/\/script\.google\.com\/macros\/s\/[\w-]+\/exec$/.test(url)) throw new Error('Paste the Web app URL ending in /exec (from Deploy > Manage deployments)');
@@ -1938,7 +1955,7 @@ const ACTIONS = {
   },
 
   testStorage: {
-    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN],
+    auth: true, roles: [ROLES.SUPER],
     fn: async function () {
       const r = await this.helper('ping', {});
       return { message: `Connected · files go to "${r.folder}" in Google Drive` };
@@ -1946,7 +1963,7 @@ const ACTIONS = {
   },
 
   saveDocTypes: {
-    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR], write: true,
+    auth: true, roles: [ROLES.SUPER], write: true,
     fn: async function (p, user) {
       await this.fileTabs();
       const rows = [], seen = new Set();
@@ -2032,6 +2049,7 @@ const ACTIONS = {
   getPhotos: {
     auth: true,
     fn: async function () {
+      if (!(await this.modules()).includes('FILES')) return { photos: {} };
       await this.fileTabs();
       const out = {};
       (await this.read('Organisation', 'Files')).filter(f => f.DocType === 'PHOTO' && f.Status !== 'Deleted' && f.Thumb)
@@ -2041,12 +2059,29 @@ const ACTIONS = {
   },
 
   runFileCleanup: {
-    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN], write: true,
+    auth: true, roles: [ROLES.SUPER], write: true,
     fn: async function (p, user) { return this.purgeRejected(user.u); }
   },
 
+  getModules: {
+    auth: true, roles: [ROLES.SUPER],
+    fn: async function () { return { modules: await this.modules(), all: Object.entries(MODULES).map(([k, m]) => ({ key: k, ...m })) }; }
+  },
+
+  saveModules: {
+    auth: true, roles: [ROLES.SUPER], write: true,
+    fn: async function (p, user) {
+      const on = new Set((p.modules || []).filter(m => MODULES[m]));
+      Object.entries(MODULES).forEach(([k, m]) => { if (on.has(k) && m.needs) m.needs.forEach(n => on.add(n)); });   // switch on what a module needs
+      const list = Object.keys(MODULES).filter(k => on.has(k));
+      await this.setCompany({ Modules: list.length ? list.join(',') : 'NONE' });
+      await this.log('Settings', 'MODULES', 'Modules saved', list.join(', ') || 'none', user.u);
+      return { message: 'Saved', modules: list };
+    }
+  },
+
   getFormSetup: {
-    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN],
+    auth: true, roles: [ROLES.SUPER],
     fn: async function () {
       return { form: await this.applyForm(), lists: await this.lists(), listNames: Object.fromEntries(Object.entries(LIST_DEFS).map(([k, d]) => [k, d.name])),
         types: FORM_TYPES, locked: FORM_LOCKED };
@@ -2054,7 +2089,7 @@ const ACTIONS = {
   },
 
   saveApplyForm: {
-    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN], write: true,
+    auth: true, roles: [ROLES.SUPER], write: true,
     fn: async function (p, user) {
       const cur = await this.applyForm(), defs = defaultForm(), rows = [], seen = new Set();
       (p.form || []).forEach(q => {
@@ -2082,7 +2117,7 @@ const ACTIONS = {
   },
 
   saveLists: {
-    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN], write: true,
+    auth: true, roles: [ROLES.SUPER], write: true,
     fn: async function (p, user) {
       await this.formTabs();
       const rows = [];
@@ -2526,3 +2561,34 @@ const LIST_DEFS = {
 
 // Not part of the workforce any more (left, or hired but never joined)
 function GONE(status) { return status === 'Exited' || status === 'Did not join'; }
+
+// ── Modules a client can have switched on (Settings → Modules, C&B only) ──
+const MODULES = {
+  ROLES: { name: 'Roles & responsibilities', desc: 'Role summaries, responsibilities and RACI' },
+  HIRING: { name: 'Hiring', desc: 'QR apply form, pipeline, interviews, offers, Mark Joined' },
+  ONBOARDING: { name: 'Onboarding', desc: 'Onboarding checklists — start automatically on Mark Joined', needs: ['HIRING'] },
+  EXIT: { name: 'Exit', desc: 'Exit checklists, cancel exit' },
+  KPI: { name: 'KPIs', desc: 'KPI setup, monthly entry and approval' },
+  POLICIES: { name: 'Policies', desc: 'HR policy library' },
+  LETTERS: { name: 'Letters & salary', desc: 'Offer / appointment / other letters, salary structure' },
+  REPORTS: { name: 'Reports', desc: 'Reports for the modules that are on' },
+  FILES: { name: 'Document uploads', desc: 'Photos, candidate and employee documents, checklist attachments' }
+};
+const MODULE_ACTIONS = {
+  ROLES: ['getRoles', 'saveRole', 'importRoles'],
+  HIRING: ['applyCandidate', 'addCandidate', 'getHiring', 'getCandidateTimeline', 'updateCandidate', 'logCall', 'saveQuestions', 'importQuestions', 'saveHrScore',
+    'createInterviewToken', 'getInterviewByToken', 'submitInterviewScore', 'decideCandidate', 'updateOffer', 'markJoined', 'getFormSetup', 'saveApplyForm'],
+  EXIT: ['startExit'],
+  KPI: ['getKpiSetup', 'saveKpiParam', 'removeKpiParam', 'importKpiParams', 'saveBands', 'getKpiMonth', 'saveKpiEntries', 'approveKpi', 'setKpiCycle', 'getKpiReport'],
+  POLICIES: ['getPolicies', 'savePolicy', 'importPolicies'],
+  LETTERS: ['getLetterSetup', 'saveBranding', 'saveLetterTemplate', 'saveSalaryComponents', 'getSalary', 'saveSalary', 'getLetterData', 'issueLetter', 'getLettersIssued', 'getIssuedLetter'],
+  REPORTS: ['getReportData'],
+  FILES: ['getFileSetup', 'saveStorageSettings', 'testStorage', 'saveDocTypes', 'uploadFile', 'listFiles', 'getFile', 'deleteFile', 'runFileCleanup']
+};
+const ACTION_MODULE = {}; Object.entries(MODULE_ACTIONS).forEach(([m, list]) => list.forEach(a => ACTION_MODULE[a] = m));
+// Which module(s) an action needs; any one of the list is enough
+function moduleFor(action, body) {
+  if (['saveChecklist', 'completeChecklist', 'cancelChecklist', 'saveChecklistTemplate'].includes(action)) return [body.kind === 'Exit' ? 'EXIT' : 'ONBOARDING'];
+  if (action === 'getLifecycle') return ['ONBOARDING', 'EXIT'];
+  return ACTION_MODULE[action] ? [ACTION_MODULE[action]] : null;
+}

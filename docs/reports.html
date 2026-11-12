@@ -44,16 +44,17 @@
 <script src="assets/letter.js"></script>
 <script src="assets/files.js"></script>
 <script>
-const S = guard(['SuperAdmin', 'Admin', 'HR', 'Manager']);
+const S = guard(['SuperAdmin', 'Admin', 'HR', 'Manager'], 'REPORTS');
 renderTop('reports');
 let D = null, cur = null, XROWS = null, loadedKey = '';
+const canSee = r => (D.isHR || !r.hr) && (!r.mod || hasMod(r.mod));
 const REPORTS = [
   { k: 'headcount', t: 'Headcount & vacancy', hr: true },
   { k: 'movement', t: 'Joiners & exits', hr: true },
-  { k: 'funnel', t: 'Hiring funnel', hr: true },
+  { k: 'funnel', t: 'Hiring funnel', hr: true, mod: 'HIRING' },
   { k: 'probation', t: 'Probation due', hr: false },
-  { k: 'lifecycle', t: 'Onboarding & exit status', hr: true },
-  { k: 'scorecard', t: 'KPI scorecard', hr: false },
+  { k: 'lifecycle', t: 'Onboarding & exit status', hr: true, mod: ['ONBOARDING', 'EXIT'] },
+  { k: 'scorecard', t: 'KPI scorecard', hr: false, mod: 'KPI' },
   { k: 'profile', t: 'Employee profile', hr: false },
   { k: 'celebrate', t: 'Birthdays & anniversaries', hr: false }
 ];
@@ -103,7 +104,7 @@ async function ensureData(entriesMonth) {
   $('#lstyle').textContent = letterStyles(D.brand);
 }
 function menu() {
-  const list = REPORTS.filter(r => D.isHR || !r.hr);
+  const list = REPORTS.filter(canSee);
   $('#rlist').innerHTML = list.map(r => `<li data-k="${r.k}" class="${r.k === cur ? 'on' : ''}">${esc(r.t)}</li>`).join('');
   document.querySelectorAll('#rlist li').forEach(li => li.onclick = () => open(li.dataset.k));
 }
@@ -341,7 +342,7 @@ $('#xls').onclick = () => {
 };
 (async () => {
   if (!S) return;
-  try { await ensureData(''); menu(); const h = location.hash.slice(1), list = REPORTS.filter(r => D.isHR || !r.hr); open(list.find(r => r.k === h) ? h : list[0].k); }
+  try { await ensureData(''); menu(); const h = location.hash.slice(1), list = REPORTS.filter(canSee); open(list.find(r => r.k === h) ? h : list[0].k); }
   catch (e) { $('#pages').innerHTML = `<p class="under">${esc(e.message)}</p>`; }
 })();
 </script></body></html>

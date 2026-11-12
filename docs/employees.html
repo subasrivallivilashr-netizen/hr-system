@@ -119,6 +119,7 @@ function openEmp(e) {
   $('#eTypeBox').innerHTML = listSelect('eType', D.lists.EMPLOYMENT_TYPE, (e && e.EmploymentType) || D.lists.EMPLOYMENT_TYPE[0]);
   $('#dEmpT').textContent = e ? 'Edit ' + e.FullName : 'Add employee'; $('#m-emp').textContent = '';
   $('#extras').classList.toggle('hidden', !e);
+  $('#lGo').closest('.box').classList.toggle('hidden', !hasMod('LETTERS')); document.querySelector('#extras details:not(#docDet)').classList.toggle('hidden', !hasMod('LETTERS')); $('#docDet').classList.toggle('hidden', !hasMod('FILES'));
   if (e) {
     const L = [['appointment', 'Appointment letter'], ['confirmation', 'Confirmation letter'], ['probation_extension', 'Probation extension'], ['transfer', 'Promotion / transfer letter'], ['warning', 'Warning letter'], ['experience', 'Experience certificate'], ['relieving', 'Relieving letter']];
     $('#lType').innerHTML = L.map(([k, l]) => `<option value="${k}">${l}</option>`).join('') + (window.CUSTOM_LETTERS || []).map(t => `<option value="${esc(t.Type)}">${esc(t.Title)}</option>`).join('');
@@ -184,6 +185,6 @@ $('#goImp').onclick = async ev => {
   b.textContent = 'Import';
 };
 
-if (S && canEdit) api('getLetterSetup').then(r => window.CUSTOM_LETTERS = r.templates.filter(t => t.custom && t.Ref === 'employee')).catch(() => {});
+if (S && canEdit && hasMod('LETTERS')) api('getLetterSetup').then(r => window.CUSTOM_LETTERS = r.templates.filter(t => t.custom && t.Ref === 'employee')).catch(() => {});
 if (S) load().catch(e => alert(e.message));
 </script></body></html>

@@ -765,11 +765,14 @@ const ACTIONS = {
         throw new Error('Invalid username or password');
       }
       const company = await this.companyMap();
-      return { token: await this.makeSession(u), role: u.Role, fullName: u.FullName, stores: u.StoreCodes, empId: u.EmpId || '', company: company.CompanyName || '', modules: await this.modules() };
+      return { token: await this.makeSession(u), role: u.Role, fullName: u.FullName, stores: u.StoreCodes, empId: u.EmpId || '', company: company.CompanyName || '', logo: company.BrandLogo || '', modules: await this.modules() };
     }
   },
 
-  me: { auth: true, fn: async function (p, user) { return { username: user.u, role: user.r, fullName: user.n, modules: await this.modules(), company: (await this.companyMap()).CompanyName || '' }; } },
+  me: { auth: true, fn: async function (p, user) { const c = await this.companyMap(); return { username: user.u, role: user.r, fullName: user.n, modules: await this.modules(), company: c.CompanyName || '', logo: c.BrandLogo || '' }; } },
+
+  // Public: name + logo for the login page
+  getBrandPublic: { fn: async function () { const c = await this.companyMap(); return { companyName: c.CompanyName || '', logo: c.BrandLogo || '' }; } },
 
   // ── Settings ──
   getSettings: {
@@ -1304,7 +1307,7 @@ const ACTIONS = {
   getApplyForm: {
     fn: async function () {
       const company = await this.companyMap(), mods = await this.modules();
-      if (!mods.includes('HIRING')) return { closed: true, companyName: company.CompanyName || '' };
+      if (!mods.includes('HIRING')) return { closed: true, companyName: company.CompanyName || '', logo: company.BrandLogo || '' };
       const positions = (await this.read('Organisation', 'Positions')).filter(p => p.Active !== 'No' && p.ParentPositionCode)
         .map(p => ({ PositionCode: p.PositionCode, PositionName: p.PositionName, StoreCode: p.StoreCode }));
       const stores = (await this.read('Settings', 'Stores')).filter(s => s.Active !== 'No')
@@ -1315,7 +1318,7 @@ const ACTIONS = {
       const form = (await this.applyForm()).filter(f => f.Setting !== 'Hidden')
         .map(f => ({ Code: f.Code, Label: f.Label, Section: f.Section, Type: f.Type, Options: f.Options, Hint: f.Hint, Required: f.Setting === 'Mandatory' }));
       const L = await this.lists();
-      return { companyName: company.CompanyName || '', positions, stores, uploads, form, lists: { SOURCE: L.SOURCE } };
+      return { companyName: company.CompanyName || '', logo: company.BrandLogo || '', positions, stores, uploads, form, lists: { SOURCE: L.SOURCE } };
     }
   },
 
@@ -2127,6 +2130,44 @@ const ACTIONS = {
   runFileCleanup: {
     auth: true, roles: [ROLES.SUPER], write: true,
     fn: async function (p, user) { return this.purgeRejected(user.u); }
+  },
+
+  // ── Start fresh: clears ALL client data. Keeps only the C&B Super Admin, the spreadsheet list and the file-upload connection. ──
+  resetAllData: {
+    auth: true, roles: [ROLES.SUPER], write: true,
+    fn: async function (p, user) {
+      const company = await this.companyMap();
+      const expect = String(company.CompanyName || '').trim() || 'RESET';
+      if (String(p.confirm || '').trim() !== expect) throw new Error(`Type ${company.CompanyName ? 'the company name' : 'RESET'} exactly to confirm`);
+      const reg = await this.getRegistry(true), done = [];
+      // 1. Uploaded documents → Drive trash (before the Files list is cleared)
+      let trashed = 0;
+      if (company.UploadUrl) {
+        const ids = (await this.read('Organisation', 'Files').catch(() => [])).filter(f => f.Status !== 'Deleted' && f.FileId).map(f => f.FileId);
+        for (let i = 0; i < ids.length; i += 200) { try { const r = await this.helper('trash', { fileIds: ids.slice(i, i + 200) }); trashed += Number(r.trashed || 0); } catch (e) { /* keep going */ } }
+      }
+      // 2. Every data row in every spreadsheet (headers stay) — one request per spreadsheet
+      for (const [mod, id] of Object.entries(reg)) {
+        if (!id) continue;
+        const titles = [...await this.tabTitles(id, true)].filter(t => !(mod === 'Settings' && ['Registry', 'Company', 'Users'].includes(t)));
+        if (!titles.length) continue;
+        await this.gfetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}/values:batchClear`,
+          { method: 'POST', body: JSON.stringify({ ranges: titles.map(t => `'${t.replace(/'/g, "''")}'!A2:ZZ`) }) });
+        done.push(`${mod} (${titles.length} tabs)`);
+      }
+      // 3. Users: only the C&B Super Admin stays
+      const keepUsers = (await this.read('Settings', 'Users')).filter(u => u.Role === ROLES.SUPER).map(clean);
+      await this.rewriteTab('Settings', 'Users', keepUsers);
+      // 4. Company settings back to defaults; keep the file-upload connection and the store limit
+      const keep = {}; ['UploadUrl', 'UploadSecret', 'FileRetentionDays', 'StoreLimit'].forEach(k => { if (company[k] !== undefined && company[k] !== '') keep[k] = company[k]; });
+      const fresh = { CompanyName: String(p.newCompanyName || '').trim(), EmpIdPrefix: 'EMP-', EmpIdDigits: 5, EmpIdNextNumber: 1, EmpIdPerStore: 'No',
+        ProbationDays: 90, SameStructureAllStores: 'Yes', InterviewPassPct: 60, ...keep };
+      await this.rewriteTab('Settings', 'Company', Object.entries(fresh).map(([Key, Value]) => ({ Key, Value })));
+      // 5. Forget everything held in memory
+      this.cache.clear(); this.done = new Map(); this.registry = null;
+      await this.log('Settings', 'RESET', 'All client data cleared', `${done.join(', ')} · ${trashed} files to Drive trash · ${keepUsers.length} login kept`, user.u);
+      return { message: `All data cleared. ${trashed ? trashed + ' uploaded files moved to the Drive trash. ' : ''}Only the C&B login is left.`, cleared: done };
+    }
   },
 
   getModules: {

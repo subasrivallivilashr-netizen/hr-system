@@ -180,7 +180,7 @@ function renderTop(active, companyName) {
     return `<div class="sb-g">${g.label}</div>${items.map(link).join('')}`;
   }).join('');
   const name = esc(companyName || s.company || 'HR System');
-  $('#top').innerHTML = `<div class="sb-brand"><i></i><b id="co">${name}</b></div><nav class="nav" aria-label="Main menu">${html}</nav>
+  $('#top').innerHTML = `${s.logo ? `<div class="sb-logo"><img src="${esc(s.logo)}" alt="${name} logo"></div>` : ''}<div class="sb-brand"><i></i><b id="co">${name}</b></div><nav class="nav" aria-label="Main menu">${html}</nav>
     <div class="sb-foot"><div class="sb-user">${esc(s.name)}<span>${esc(s.role === 'SuperAdmin' ? 'C&B Super Admin' : s.role)}</span></div><button id="out">Sign out</button>${CREDIT_HTML}</div>`;
   document.body.classList.add('has-side');
   $('#out').onclick = () => { Session.clear(); location.href = 'index.html'; };
@@ -196,8 +196,9 @@ function renderTop(active, companyName) {
     renderTop.checked = true;
     api('me').then(m => { const cur = Session.get(); if (!cur || !m.modules) return;
       const changed = JSON.stringify(cur.modules || null) !== JSON.stringify(m.modules);
-      cur.modules = m.modules; Session.set(cur);
-      if (changed) location.reload();
+      const look = (cur.logo || '') !== (m.logo || '') || (cur.company || '') !== (m.company || '');
+      cur.modules = m.modules; cur.logo = m.logo || ''; cur.company = m.company || ''; Session.set(cur);
+      if (changed) location.reload(); else if (look) renderTop(active, companyName);
     }).catch(() => {});
   }
 }

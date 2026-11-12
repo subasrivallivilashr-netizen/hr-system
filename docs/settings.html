@@ -25,6 +25,24 @@
       <div><label>Store limit <span id="limHint" style="font-weight:400;color:var(--muted)"></span></label><input id="StoreLimit" type="number" min="1"></div>
     </div>
     <div class="row-end"><span class="msg" id="m-company"></span><button class="btn" data-save="company">Save</button></div>
+    <div id="logoBox" style="border-top:1px solid var(--line);margin-top:18px;padding-top:6px">
+      <label>Company logo <span class="hint">(shown in the menu, login page, apply form, letters and reports · PNG or JPG)</span></label>
+      <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+        <div class="logo-pv"><img id="logoPv" alt="Company logo preview" class="hidden"><span id="logoNone" class="sub">No logo yet</span></div>
+        <input type="file" id="logoF" accept="image/png,image/jpeg" style="width:auto"><button type="button" id="logoX" class="danger">Remove logo</button>
+        <span class="msg" id="m-logo"></span>
+      </div>
+    </div>
+  </section>
+
+  <section id="dangerZone" class="card danger-zone hidden">
+    <h2>Start fresh</h2>
+    <p class="sub">Clears <b>all</b> data of this company: employees, candidates, KPIs, checklists, letters, uploaded documents (to the Drive trash), activity log, every login except the C&amp;B Super Admin, and all settings (they go back to the defaults). The spreadsheets themselves and the file-upload connection stay. <b>This cannot be undone.</b></p>
+    <div class="grid">
+      <div><label for="rsNew">New company name (optional)</label><input id="rsNew" placeholder="e.g. Sri Lakshmi Silks"></div>
+      <div><label for="rsConf" id="rsLab">Type the current company name to confirm</label><input id="rsConf" autocomplete="off"></div>
+    </div>
+    <div class="row-end"><span class="msg" id="m-rs"></span><button type="button" class="btn btn-err" id="rsGo">Clear all data</button></div>
   </section>
 
   <section id="t-ids" class="card hidden">
@@ -135,15 +153,21 @@ const isSA = S && S.role === 'SuperAdmin';
 // Admin: Users + own password only. C&B Super Admin: everything (Files / Apply form only when their module is on)
 const TAB_OK = { company: isSA, ids: isSA, stores: isSA, users: true, files: isSA && hasMod('FILES'), form: isSA && hasMod('HIRING'), lists: isSA, modules: isSA, me: true };
 document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('hidden', !TAB_OK[b.dataset.t]));
+if (isSA) $('#dangerZone').classList.remove('hidden'); else $('#logoBox').classList.add('hidden');
 if (S && !isSA) { document.querySelectorAll('#tabs button').forEach(x => x.classList.toggle('on', x.dataset.t === 'users')); document.querySelectorAll('main > section').forEach(s => s.classList.toggle('hidden', s.id !== 't-users')); }
 document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => {
   document.querySelectorAll('#tabs button').forEach(x => x.classList.toggle('on', x === b));
-  document.querySelectorAll('main > section').forEach(s => s.classList.toggle('hidden', s.id !== 't-' + b.dataset.t));
+  document.querySelectorAll('main > section').forEach(s => s.classList.toggle('hidden', s.id !== 't-' + b.dataset.t && !(s.id === 'dangerZone' && b.dataset.t === 'company' && isSA)));
 });
 
 async function load() {
   DATA = await api('getSettings');
   const c = DATA.company;
+  if (isSA) {
+    const cur = String(c.CompanyName || '').trim();
+    $('#rsLab').textContent = cur ? `Type "${cur}" to confirm` : 'Type RESET to confirm';
+    showLogo(c.BrandLogo || '');
+  }
   ['CompanyName','ProbationDays','SameStructureAllStores','StoreLimit','EmpIdPrefix','EmpIdDigits','EmpIdNextNumber','EmpIdPerStore']
     .forEach(k => { if ($('#' + k)) $('#' + k).value = c[k] ?? ''; });
   setCompanyName(c.CompanyName);
@@ -295,6 +319,37 @@ function drawLists() {
 $('#lsSave').onclick = async () => {
   const lists = {}; Object.keys(FSETUP.listNames).forEach(k => lists[k] = $('#ls_' + k).value.split('\n').map(x => x.trim()).filter(Boolean));
   try { const r = await api('saveLists', { lists }); await loadFormSetup(); showMsg($('#m-ls'), r.message, true); } catch (e) { showMsg($('#m-ls'), e.message); }
+};
+
+// ---- Company logo (same image as Letters → Letterhead)
+function showLogo(src) { $('#logoPv').src = src || ''; $('#logoPv').classList.toggle('hidden', !src); $('#logoNone').classList.toggle('hidden', !!src); $('#logoX').classList.toggle('hidden', !src); }
+function shrinkImg(file, maxW) {
+  return new Promise((res, rej) => { const img = new Image(), url = URL.createObjectURL(file);
+    img.onload = () => { let w = Math.min(maxW, img.width), out = '';
+      for (let i = 0; i < 6; i++) { const c = document.createElement('canvas'); c.width = w; c.height = Math.round(img.height * w / img.width);
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); out = c.toDataURL('image/png'); if (out.length > 45000) out = c.toDataURL('image/jpeg', .85);
+        if (out.length <= 45000) break; w = Math.round(w * .75); }
+      URL.revokeObjectURL(url); out.length <= 45000 ? res(out) : rej(new Error('The image is too detailed. Try a simpler or smaller logo.')); };
+    img.onerror = () => rej(new Error('That file is not an image')); img.src = url; });
+}
+async function saveLogo(v) {
+  await api('saveBranding', { values: { BrandLogo: v } }); showLogo(v);
+  const s = Session.get(); s.logo = v; Session.set(s); renderTop('settings'); showMsg($('#m-logo'), v ? 'Logo saved' : 'Logo removed', true);
+}
+$('#logoF').onchange = async () => { const f = $('#logoF').files[0]; if (!f) return;
+  try { await saveLogo(await shrinkImg(f, 400)); } catch (e) { showMsg($('#m-logo'), e.message); } $('#logoF').value = ''; };
+$('#logoX').onclick = async () => { if (await uiConfirm('Remove the company logo?', { okText: 'Remove' })) try { await saveLogo(''); } catch (e) { showMsg($('#m-logo'), e.message); } };
+
+// ---- Start fresh (C&B only)
+$('#rsGo').onclick = async () => {
+  const confirmText = $('#rsConf').value.trim();
+  if (!confirmText) return showMsg($('#m-rs'), 'Type the confirmation first');
+  if (!await uiConfirm('Delete ALL data of this company? Only the C&B login stays. This cannot be undone.', { okText: 'Yes, clear everything', danger: true, title: 'Start fresh' })) return;
+  try {
+    const r = await api('resetAllData', { confirm: confirmText, newCompanyName: $('#rsNew').value.trim() });
+    const s = Session.get(); s.company = $('#rsNew').value.trim(); s.logo = ''; s.modules = null; Session.set(s);
+    await uiAlert(r.message, 'Done'); location.reload();
+  } catch (e) { showMsg($('#m-rs'), e.message); }
 };
 
 // ---- Modules (C&B only)

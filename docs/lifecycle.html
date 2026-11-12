@@ -34,7 +34,7 @@
 <dialog id="dStart"><form method="dialog" id="fStart" style="padding:20px">
   <h3 id="sT"></h3>
   <label>Employee</label><select id="sEmp" required></select>
-  <div id="exitFields"><label>Last working day</label><input type="date" id="sLwd"><label>Reason for leaving</label><input id="sReason" placeholder="e.g. Higher studies, relocation, better offer"></div>
+  <div id="exitFields"><label>Last working day</label><input type="date" id="sLwd"><label>Reason for leaving</label><div id="sReasonBox"></div></div>
   <p class="sub" id="sNote"></p>
   <div class="row-end"><span class="msg" id="m-s"></span><button value="cancel" formnovalidate>Cancel</button><button class="btn" id="sGo">Start</button></div>
 </form></dialog>
@@ -117,15 +117,16 @@ $('#startBtn').onclick = () => {
   $('#sEmp').innerHTML = '<option value="">— Select —</option>' + list.map(e => `<option value="${esc(e.EmpId)}">${esc(e.FullName)} · ${esc(e.EmpId)} · ${esc(pName(e.PositionCode))}</option>`).join('');
   $('#exitFields').classList.toggle('hidden', !isExit);
   $('#sNote').textContent = isExit ? 'The employee status changes to "Notice Period" now, and to "Exited" when the checklist is completed.' : 'Only employees who have never had an onboarding record are listed.';
-  $('#sLwd').value = ''; $('#sReason').value = ''; $('#m-s').textContent = '';
+  $('#sLwd').value = ''; $('#sReasonBox').innerHTML = listSelect('sReason', D.lists.EXIT_REASON, '', { blank: '— Select —' }); $('#m-s').textContent = '';
   $('#dStart').showModal();
 };
 $('#sGo').onclick = async e => {
   e.preventDefault();
   if (!$('#sEmp').value) return showMsg($('#m-s'), 'Choose the employee');
   if (tab === 'Exit' && !$('#sLwd').value) return showMsg($('#m-s'), 'Choose the last working day');
+  if (tab === 'Exit' && !listValue('sReason')) return showMsg($('#m-s'), 'Choose the reason for leaving');
   try {
-    const r = tab === 'Exit' ? await api('startExit', { empId: $('#sEmp').value, lastWorkingDay: $('#sLwd').value, reason: $('#sReason').value })
+    const r = tab === 'Exit' ? await api('startExit', { empId: $('#sEmp').value, lastWorkingDay: $('#sLwd').value, reason: listValue('sReason') })
       : await api('startOnboarding', { empId: $('#sEmp').value });
     $('#dStart').close(); await load(); openCk(r.recordId);
   } catch (err) { showMsg($('#m-s'), err.message); }

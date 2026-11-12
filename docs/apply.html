@@ -5,46 +5,8 @@
 <div class="pub-head"><h1 id="co">Job Application</h1><p>Fill in your details. HR will contact you.</p></div>
 <div class="pub">
   <form class="card" id="f" novalidate>
-    <h2>About you</h2>
-    <div class="grid">
-      <div><label class="req">Full name</label><input name="Name" required autocomplete="name"></div>
-      <div><label class="req">Mobile number</label><input name="Phone" required inputmode="numeric" maxlength="10" placeholder="10 digits"></div>
-      <div><label>Gender</label><select name="Gender"><option value="">—</option><option>Male</option><option>Female</option><option>Other</option></select></div>
-      <div><label>Date of birth</label><input name="DOB" type="date"></div>
-      <div><label>Email</label><input name="Email" type="email"></div>
-      <div><label>City / State</label><input name="CityState" placeholder="e.g. Belagavi, Karnataka"></div>
-    </div>
-    <label>Address</label><input name="Address">
-
-    <h2 style="margin-top:20px">The job</h2>
-    <div class="grid">
-      <div><label class="req">Position applying for</label><select name="PositionCode" id="pos" required></select></div>
-      <div><label>Preferred location</label><select name="StoreCode" id="store"></select></div>
-      <div><label>How did you hear about us?</label><select name="Source" id="src"><option>Walk-in</option><option>Employee Reference</option><option>Advertisement</option><option>Online / Social media</option><option>Other</option></select></div>
-      <div id="refBox" class="hidden"><label>Referred by (name)</label><input name="Referrer"></div>
-      <div id="refIdBox" class="hidden"><label>Referrer's employee ID</label><input name="ReferrerEmpId"></div>
-    </div>
-
-    <h2 style="margin-top:20px">Education & experience</h2>
-    <div class="grid">
-      <div><label>Highest qualification</label><input name="Qualification" placeholder="e.g. 12th, B.Com"></div>
-      <div><label>Experience</label><input name="Experience" placeholder="e.g. 2 years in retail"></div>
-      <div><label>Current occupation</label><input name="Occupation" placeholder="e.g. Sales at XYZ, Student"></div>
-      <div><label>Current salary (₹/month)</label><input name="CurrentSalary" inputmode="numeric"></div>
-      <div><label>Expected salary (₹/month)</label><input name="ExpectedSalary" inputmode="numeric"></div>
-      <div><label>Notice period</label><input name="NoticePeriod" placeholder="e.g. Immediate, 15 days"></div>
-    </div>
-
-    <h2 style="margin-top:20px">A few questions</h2>
-    <label>Why do you want to join us?</label><textarea name="WhyJoin"></textarea>
-    <label>Why should we hire you?</label><textarea name="WhyHire"></textarea>
-    <label>What will you achieve in your first 90 days?</label><textarea name="Value90Days"></textarea>
-    <div class="grid">
-      <div><label>Can you work on weekends?</label><div class="choice"><label><input type="radio" name="WeekendOK" value="Yes"> Yes</label><label><input type="radio" name="WeekendOK" value="No"> No</label></div></div>
-      <div><label>Do you have your own vehicle?</label><div class="choice"><label><input type="radio" name="OwnVehicle" value="Yes"> Yes</label><label><input type="radio" name="OwnVehicle" value="No"> No</label></div></div>
-    </div>
+    <div id="qs"><p class="sub">Loading form…</p></div>
     <div id="upBox" class="hidden"><h2 style="margin-top:20px">Documents</h2><p class="sub">PDF, JPG or PNG · up to 5 MB each. You can take a photo with your phone.</p><div id="ups"></div></div>
-    <label>Resume link (optional)</label><input name="ResumeKey" placeholder="Google Drive / LinkedIn link">
     <input class="trap" name="website" tabindex="-1" autocomplete="off" aria-hidden="true">
 
     <button class="btn block" id="b">Submit application</button>
@@ -56,11 +18,13 @@
     <button class="btn" id="again">Submit another application</button>
   </div>
 </div>
+<div class="pub-foot"><span class="credit">Powered by <i></i><b>C&amp;B</b></span></div>
 <script src="assets/app.js"></script>
 <script src="assets/files.js"></script>
+<script src="assets/form.js"></script>
 <script>
 const byHR = new URLSearchParams(location.search).get('hr') === '1' && Session.get();
-let UPLOADS = [];
+let UPLOADS = [], FORM = [], CTX = {};
 const NOTE = { PHOTO: 'A clear passport-style photo of your face.', RESUME: 'Your CV / resume.', AADHAR: 'Please upload a <b>masked Aadhaar</b> (first 8 digits hidden). You can download one from myaadhaar.uidai.gov.in.' };
 function renderUploads() {
   $('#upBox').classList.toggle('hidden', !UPLOADS.length);
@@ -80,35 +44,43 @@ async function init() {
   try {
     const d = await api('getApplyForm');
     if (d.companyName) { $('#co').textContent = d.companyName + ' — Job Application'; document.title = d.companyName + ' — Apply'; }
-    $('#pos').innerHTML = '<option value="">— Select —</option>' + d.positions.map(p => `<option value="${esc(p.PositionCode)}">${esc(p.PositionName)}</option>`).join('');
+    FORM = d.form; CTX = { positions: d.positions, stores: d.stores, lists: d.lists };
+    $('#qs').innerHTML = formSections(FORM, {}, CTX, { markRequired: true });
     UPLOADS = d.uploads || []; renderUploads();
-    $('#store').innerHTML = '<option value="">Any</option>' + d.stores.filter(s => s.Type !== 'Head Office').map(s => `<option value="${esc(s.StoreCode)}">${esc(s.StoreName)}</option>`).join('');
   } catch (e) { showMsg($('#m'), 'Form could not load: ' + e.message); }
 }
-$('#src').onchange = () => { const r = $('#src').value === 'Employee Reference'; $('#refBox').classList.toggle('hidden', !r); $('#refIdBox').classList.toggle('hidden', !r); };
 $('#f').addEventListener('submit', async e => {
   e.preventDefault();
-  const f = $('#f'), o = {};
-  new FormData(f).forEach((v, k) => o[k] = String(v).trim());
+  const f = $('#f'), b = $('#b');
+  if (!FORM.length) return;
+  $('#m').textContent = '';
+  const o = readForm(f, FORM), website = f.querySelector('[name=website]').value;
   if (!o.Name) return showMsg($('#m'), 'Please enter your name');
   if (!/^\d{10}$/.test(o.Phone)) return showMsg($('#m'), 'Please enter a 10-digit mobile number');
   if (!o.PositionCode) return showMsg($('#m'), 'Please choose the position');
-  const website = o.website; delete o.website;
+  if (o.Source === 'Other' && !o.SourceDetail) return showMsg($('#m'), 'Please tell us where you heard about us');
+  const miss = missingAnswers(FORM, o);
+  if (miss.length && !byHR) return showMsg($('#m'), 'Please answer: ' + miss.join(', '));
+  b.disabled = true; b.textContent = 'Please wait…';
   const files = [];
-  for (const u of UPLOADS) {
-    const f = document.querySelector(`#ups input[data-doc="${u.Code}"]`).files[0];
-    if (!f) { if (u.Required) return showMsg($('#m'), 'Please attach: ' + u.Name); continue; }
-    try { files.push(await readUpload(f, u.Code)); } catch (err) { return showMsg($('#m'), err.message); }
-  }
-  const b = $('#b'); b.disabled = true; b.textContent = files.length ? 'Uploading…' : 'Submitting…';
   try {
-    const r = byHR ? await api('addCandidate', { candidate: o, files }) : await api('applyCandidate', { candidate: o, website, files });
+    for (const u of UPLOADS) {
+      const fl = document.querySelector(`#ups input[data-doc="${u.Code}"]`).files[0];
+      if (!fl) { if (u.Required && !byHR) throw new Error('Please attach: ' + u.Name); continue; }
+      files.push(await readUpload(fl, u.Code));
+    }
+    b.textContent = files.length ? 'Uploading…' : 'Submitting…';
+    let r = byHR ? await api('addCandidate', { candidate: o, files }) : await api('applyCandidate', { candidate: o, website, files });
+    if (r.needConfirm) {
+      if (!confirm('These mandatory items are missing:\n• ' + r.missing.join('\n• ') + '\n\nSave anyway? The candidate will be marked "Incomplete" so you can fill them in later.')) throw new Error('Not saved. Fill in the missing items, or save anyway.');
+      r = await api('addCandidate', { candidate: o, files, allowIncomplete: true });
+    }
     if (r.fileNote) alert(r.fileNote);
     $('#appNo').textContent = r.appNo || 'Received';
     f.classList.add('hidden'); $('#done').classList.remove('hidden'); window.scrollTo(0, 0);
   } catch (err) { showMsg($('#m'), err.message); }
   b.disabled = false; b.textContent = 'Submit application';
 });
-$('#again').onclick = () => { $('#f').reset(); renderUploads(); $('#f').classList.remove('hidden'); $('#done').classList.add('hidden'); $('#m').textContent = ''; };
+$('#again').onclick = () => { $('#f').reset(); $('#qs').innerHTML = formSections(FORM, {}, CTX); renderUploads(); $('#f').classList.remove('hidden'); $('#done').classList.add('hidden'); $('#m').textContent = ''; };
 init();
 </script></body></html>

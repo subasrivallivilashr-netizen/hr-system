@@ -81,7 +81,7 @@ const tiles = list => `<div class="tiles">${list.map(([v, l]) => `<div class="tl
 const hbars = (items, max) => { max = max || Math.max(1, ...items.map(i => i[1])); return items.map(([l, v, note]) => `<div class="hb"><span>${esc(l)}</span><div class="tr"><div class="fl" style="width:${Math.min(100, v / max * 100)}%"></div></div><b style="text-align:right">${esc(note ?? v)}</b></div>`).join(''); };
 function page(title, sub, inner) {
   const b = D.brand;
-  return `<div class="page rp"><div class="rh">${b.BrandLogo ? `<img src="${b.BrandLogo}">` : ''}<div class="co">${esc(D.companyName)}</div><div class="rt"><b>${esc(title)}</b><span>${esc(sub || '')} · generated ${longD(today())}</span></div></div>${inner}${b.BrandFooter ? `<div class="foot">${esc(b.BrandFooter)}</div>` : ''}</div>`;
+  return `<div class="page rp"><div class="rh">${b.BrandLogo ? `<img src="${b.BrandLogo}">` : ''}<div class="co">${esc(D.companyName)}</div><div class="rt"><b>${esc(title)}</b><span>${esc(sub || '')} · generated ${longD(today())}</span></div></div>${inner}<div class="foot">${b.BrandFooter ? esc(b.BrandFooter) : ''}<span class="credit" style="float:right;font-size:7.5pt">Powered by <i></i><b>C&amp;B</b></span></div></div>`;
 }
 function bar(html) { $('#rbar').innerHTML = html; $('#rbar').querySelectorAll('input,select').forEach(i => i.addEventListener('change', draw)); }
 const sel = (id, label, opts, val) => `<div><label>${label}</label><select id="${id}">${opts.map(([v, l]) => `<option value="${esc(v)}" ${String(v) === String(val) ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></div>`;
@@ -208,6 +208,8 @@ const build = {
       return Object.entries(g).sort((a, b) => b[1].a - a[1].a).map(([k, o]) => [k, o.a, o.i, o.s, o.j, pct(o.j, o.a) + '%']); };
     const declined = S2.filter(x => x.c.Status === 'Offer Rejected').length, open = S2.filter(x => !['Joined', 'Rejected', 'Offer Rejected'].includes(x.c.Status)).length;
     const rejStage = {}; S2.filter(x => x.c.Status === 'Rejected').forEach(x => { const k = (rej(x.c.AppNo) || {}).Stage || 'Pre Interview'; rejStage[k] = (rejStage[k] || 0) + 1; });
+    const rejWhy = {}; S2.filter(x => x.c.Status === 'Rejected').forEach(x => { const k = (rej(x.c.AppNo) || {}).Reason || 'Not recorded'; rejWhy[k] = (rejWhy[k] || 0) + 1; });
+    const rejN = Object.values(rejWhy).reduce((a, b) => a + b, 0);
     XROWS = [['Source', 'Applied', 'Interviewed', 'Selected', 'Joined', 'Join %']].concat(group(c => c.Source));
     $('#rinfo').textContent = 'Candidates who applied in the period, and how far they have got so far. Time to hire = application date to joining date.';
     return page('Hiring funnel', `${ymLabel(from)} – ${ymLabel(to)}${ps ? ' · ' + pN(ps) : ''}`,
@@ -215,7 +217,8 @@ const build = {
       `<h3>Funnel</h3>` + hbars(funnel, n('applied') || 1) +
       `<h3>By source</h3>` + T(['Source', 'Applied', 'Interviewed', 'Selected', 'Joined', 'Join %'], group(c => c.Source), { num: [1, 2, 3, 4, 5] }) +
       `<h3>By position</h3>` + T(['Position', 'Applied', 'Interviewed', 'Selected', 'Joined', 'Join %'], group(c => pN(c.PositionCode)), { num: [1, 2, 3, 4, 5] }) +
-      `<h3>Rejections</h3>` + T(['Stage', 'Candidates'], Object.entries(rejStage).map(([k, v2]) => [k, v2]), { num: [1] }));
+      `<h3>Rejections</h3>` + T(['Stage', 'Candidates'], Object.entries(rejStage).map(([k, v2]) => [k, v2]), { num: [1] }) +
+      (rejN ? `<h3>Why candidates were rejected</h3>` + hbars(Object.entries(rejWhy).sort((a, b) => b[1] - a[1]).map(([r, k]) => [r, k, `${k} (${pct(k, rejN)}%)`]), rejN) : ''));
   },
 
   probation() {

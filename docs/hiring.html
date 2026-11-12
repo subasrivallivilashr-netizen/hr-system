@@ -96,7 +96,7 @@
         <div><label>Joining date</label><input id="jDate" type="date"></div>
         <div><label>Store</label><select id="jStore"></select></div>
         <div style="grid-column:1/-1"><label>Reporting manager</label><select id="jMgr"></select></div>
-        <div><label>Employment type</label><select id="jType"><option>Permanent</option><option>Contract</option><option>Trainee</option></select></div>
+        <div><label>Employment type</label><div id="jTypeBox"></div></div>
         <div><label>Employee ID <span class="hint">(blank = auto)</span></label><input id="jId"></div>
       </div>
       <div class="actions"><button class="btn btn-ok" id="jGo">Mark joined</button></div>
@@ -116,6 +116,7 @@
 <script src="assets/app.js"></script>
 <script src="assets/salary.js"></script>
 <script src="assets/files.js"></script>
+<script src="assets/form.js"></script>
 <script>
 const S = guard(['SuperAdmin', 'Admin', 'HR']);
 renderTop('hiring');
@@ -176,25 +177,34 @@ function drawPipeline() {
   const list = D.candidates.filter(c => (chip === 'All' || (chip === 'Open' ? !CLOSED.includes(c.Status) : c.Status === chip)) &&
     (!fp || c.PositionCode === fp) && (!fs || c.Source === fs) && (!q || [c.Name, c.Phone, c.AppNo].join(' ').toLowerCase().includes(q)))
     .sort((a, b) => (a.CreatedAt < b.CreatedAt ? 1 : -1));
-  $('#pRows').innerHTML = list.map(c => `<tr class="click" data-a="${esc(c.AppNo)}"><td><b>${esc(c.AppNo)}</b></td><td><span class="who">${avatar(c.AppNo, c.Name, 26)}<span>${esc(c.Name)}</span></span>${c.IsDuplicatePhone === 'Yes' ? ' <span class="dup" title="This phone number applied before">REPEAT</span>' : ''}</td><td>${esc(c.Phone)}</td><td>${esc(pName(c.PositionCode))}</td><td>${esc(c.Source)}</td><td>${fmtD(c.Date)} <span class="sub">(${daysAgo(c.Date)}d)</span></td><td>${pill(c.Status)}</td></tr>`).join('')
+  $('#pRows').innerHTML = list.map(c => `<tr class="click" data-a="${esc(c.AppNo)}"><td><b>${esc(c.AppNo)}</b></td><td><span class="who">${avatar(c.AppNo, c.Name, 26)}<span>${esc(c.Name)}</span>${c.Incomplete === 'Yes' ? '<span class="tag-inc" title="Mandatory answers or documents missing">INCOMPLETE</span>' : ''}</span>${c.IsDuplicatePhone === 'Yes' ? ' <span class="dup" title="This phone number applied before">REPEAT</span>' : ''}</td><td>${esc(c.Phone)}</td><td>${esc(pName(c.PositionCode))}</td><td>${esc(c.Source)}</td><td>${fmtD(c.Date)} <span class="sub">(${daysAgo(c.Date)}d)</span></td><td>${pill(c.Status)}</td></tr>`).join('')
     || '<tr><td colspan="7" style="color:var(--muted)">No candidates here.</td></tr>';
   document.querySelectorAll('#pRows tr.click').forEach(r => r.onclick = () => openCand(r.dataset.a));
 }
 $('#q').addEventListener('input', drawPipeline); ['fPos', 'fSrc'].forEach(i => $('#' + i).addEventListener('change', drawPipeline));
 
+let curEdit = [];
+function incompleteNote(c) {
+  if (c.Incomplete !== 'Yes') return '';
+  const miss = D.form.filter(f => f.Setting === 'Mandatory' && !String(c[f.Code] || '').trim()).map(f => f.Label);
+  return ` · <span class="tag-inc">INCOMPLETE</span> <span class="sub">${miss.length ? 'missing: ' + esc(miss.join(', ')) : 'mandatory documents missing'}</span>`;
+}
 function openCand(a) {
   curApp = a; const c = cand(a), s = sched(a);
   $('#cT').innerHTML = `<span class="who">${avatar(c.AppNo, c.Name, 40)}<span>${esc(c.Name)} — ${esc(pName(c.PositionCode))}</span></span>`;
   docBox($('#cDocs'), c.AppNo, { onChange: () => { $('#cT').querySelector('.av').outerHTML = avatar(c.AppNo, c.Name, 40); drawPipeline(); } });
-  $('#cS').innerHTML = `${esc(c.AppNo)} · applied ${fmtD(c.Date)} (${daysAgo(c.Date)} days ago) · ${pill(c.Status)}${c.IsDuplicatePhone === 'Yes' ? ' · <span class="dup">applied before with this phone</span>' : ''}`;
-  const F = [['Phone', c.Phone], ['Email', c.Email], ['Gender', c.Gender], ['Date of birth', fmtD(c.DOB)], ['City', c.CityState], ['Preferred store', c.StoreCode],
-    ['Source', c.Source + (c.Referrer ? ' · ' + c.Referrer : '') + (c.ReferrerEmpId ? ' (' + c.ReferrerEmpId + ')' : '')], ['Qualification', c.Qualification], ['Experience', c.Experience],
-    ['Occupation', c.Occupation], ['Current salary', c.CurrentSalary], ['Expected salary', c.ExpectedSalary], ['Notice period', c.NoticePeriod], ['Weekend work', c.WeekendOK],
-    ['Own vehicle', c.OwnVehicle], ['Resume', c.ResumeKey ? `<a href="${esc(c.ResumeKey)}" target="_blank" rel="noopener">Open</a>` : ''],
-    ['1st call', s.Call1Date ? fmtD(s.Call1Date) + ' · ' + (s.Call1Remarks || '') : ''], ['2nd call', s.Call2Date ? fmtD(s.Call2Date) + ' · ' + (s.Call2Remarks || '') : ''],
-    ['Interview', s.InterviewDate ? fmtDT(s.InterviewDate) + ' · ' + (s.InterviewRemarks || '') : ''], ['Remarks', c.Remarks]];
-  $('#cKv').innerHTML = F.filter(x => x[1]).map(([k, v]) => `<div><span>${k}</span>${k === 'Resume' ? v : esc(v)}</div>`).join('') +
-    ['WhyJoin', 'WhyHire', 'Value90Days'].filter(k => c[k]).map(k => `<div style="grid-column:1/-1"><span>${{ WhyJoin: 'Why join us', WhyHire: 'Why hire them', Value90Days: 'First 90 days' }[k]}</span>${esc(c[k])}</div>`).join('');
+  $('#cS').innerHTML = `${esc(c.AppNo)} · applied ${fmtD(c.Date)} (${daysAgo(c.Date)} days ago) · ${pill(c.Status)}${c.IsDuplicatePhone === 'Yes' ? ' · <span class="dup">applied before with this phone</span>' : ''}${incompleteNote(c)}`;
+  const stName = code => (D.stores.find(x => x.StoreCode === code) || {}).StoreName || code;
+  const ans = f => {
+    const v = c[f.Code]; if (f.Type === 'Source') return v === 'Other' ? 'Other: ' + (c.SourceDetail || '') : (v || '') + (c.Referrer ? ' · ' + c.Referrer : '') + (c.ReferrerEmpId ? ' (' + c.ReferrerEmpId + ')' : '');
+    if (!v) return ''; if (f.Type === 'Date') return fmtD(v); if (f.Type === 'Store') return stName(v);
+    if (f.Code === 'ResumeKey' && /^https?:\/\//.test(v)) return { html: `<a href="${esc(v)}" target="_blank" rel="noopener">Open link</a>` };
+    return v;
+  };
+  const F = D.form.filter(f => !['Name', 'PositionCode'].includes(f.Code)).map(f => [f.Label, ans(f), f.Type === 'Long text'])
+    .concat([['1st call', s.Call1Date ? fmtD(s.Call1Date) + ' · ' + (s.Call1Remarks || '') : ''], ['2nd call', s.Call2Date ? fmtD(s.Call2Date) + ' · ' + (s.Call2Remarks || '') : ''],
+      ['Interview', s.InterviewDate ? fmtDT(s.InterviewDate) + ' · ' + (s.InterviewRemarks || '') : ''], ['Remarks', c.Remarks]]);
+  $('#cKv').innerHTML = F.filter(x => x[1]).map(([k, v, wide]) => `<div ${wide ? 'style="grid-column:1/-1"' : ''}><span>${esc(k)}</span>${typeof v === 'object' ? v.html : esc(v)}</div>`).join('');
   // next-step buttons
   const B = (label, fn, cls = '') => `<button class="${cls}" data-f="${fn}">${label}</button>`;
   const m = {
@@ -210,10 +220,11 @@ function openCand(a) {
   $('#cAct').innerHTML = m.length ? `<div class="actions">${m.join('')}</div>` : '<p class="sub">No further steps.</p>';
   $('#cForm').innerHTML = ''; $('#m-c').textContent = '';
   document.querySelectorAll('#cAct [data-f]').forEach(b => b.onclick = () => candAction(c, b.dataset.f));
-  // edit
-  const E = (k, l, t = 'text') => `<div><label>${l}</label><input data-e="${k}" type="${t}" value="${esc(c[k])}"></div>`;
-  $('#cEdit').innerHTML = E('Phone', 'Phone') + E('Email', 'Email') + `<div><label>Position</label><select data-e="PositionCode">${D.positions.filter(p => p.ParentPositionCode).map(p => `<option value="${esc(p.PositionCode)}" ${p.PositionCode === c.PositionCode ? 'selected' : ''}>${esc(p.PositionName)}</option>`).join('')}</select></div>` +
-    E('ExpectedSalary', 'Expected salary') + E('NoticePeriod', 'Notice period') + E('Remarks', 'Remarks');
+  // edit: every apply-form question (hidden ones only when they have a value) + remarks
+  const ef = D.form.filter(f => f.Setting !== 'Hidden' || String(c[f.Code] || '').trim()).map(f => ({ ...f, Required: false }));
+  $('#cEdit').innerHTML = formSections(ef, c, { positions: D.positions.filter(p => p.ParentPositionCode), stores: D.stores, lists: D.lists }, { prefix: 'e_', rec: c, markRequired: false }) +
+    `<div class="grid" style="margin-top:8px"><div style="grid-column:1/-1"><label>Remarks</label><input id="e__Remarks" value="${esc(c.Remarks)}"></div></div>`;
+  curEdit = ef;
   $('#dC').open || $('#dC').showModal();
   api('getCandidateTimeline', { appNo: a }).then(r => {
     $('#cTl').innerHTML = r.timeline.map(t => `<li><b>${esc(t.Action)}</b> ${t.Remarks ? '— ' + esc(t.Remarks) : ''}<br><span>${fmtDT(t.Timestamp)} · ${esc(t.DoneBy)}</span></li>`).join('') || '<li>No history yet.</li>';
@@ -224,9 +235,12 @@ function candAction(c, f) {
   if (f === 'go:callletter') return window.open(`letter.html?type=interview_call&ref=${encodeURIComponent(c.AppNo)}`, '_blank');
   if (kind === 'go') { $('#dC').close(); return arg === 'interview' ? openInterview(c.AppNo) : openOffer(c.AppNo); }
   if (kind === 'st') {
-    let note = '';
-    if (arg === 'Rejected' || arg === 'Hold') { note = prompt(`Reason for ${arg === 'Hold' ? 'putting on hold' : 'rejecting'}:`); if (note === null) return; }
-    return run(() => api('updateCandidate', { appNo: c.AppNo, status: arg, note }), '#m-c');
+    if (arg === 'Rejected' || arg === 'Hold') {
+      return askReason(arg === 'Hold' ? { title: `Put ${c.Name} on hold`, noteLabel: 'Why on hold?', noteRequired: true, okText: 'Put on hold' }
+        : { title: `Reject ${c.Name}`, list: D.lists.REJECT_REASON, reasonLabel: 'Rejection reason', okText: 'Reject', danger: true })
+        .then(a => a && run(() => api('updateCandidate', { appNo: c.AppNo, status: arg, reason: a.reason, note: a.note }), '#m-c'));
+    }
+    return run(() => api('updateCandidate', { appNo: c.AppNo, status: arg, note: '' }), '#m-c');
   }
   const step = Number(arg), isInt = step === 3;
   const s = sched(c.AppNo);
@@ -234,7 +248,7 @@ function candAction(c, f) {
     <div style="grid-column:span 2"><label>${isInt ? 'Place / notes' : 'What was discussed'}</label><input id="cfR"></div></div><div class="actions"><button class="btn" id="cfGo">Save</button></div>`;
   $('#cfGo').onclick = () => { if (!$('#cfD').value) return showMsg($('#m-c'), 'Choose the date'); run(() => api('logCall', { appNo: c.AppNo, step, date: $('#cfD').value, remarks: $('#cfR').value }), '#m-c'); };
 }
-$('#cSaveEdit').onclick = () => { const ch = {}; document.querySelectorAll('[data-e]').forEach(i => ch[i.dataset.e] = i.value); run(() => api('updateCandidate', { appNo: curApp, changes: ch }), '#m-c'); };
+$('#cSaveEdit').onclick = () => { const ch = readForm($('#cEdit'), curEdit, { prefix: 'e_' }); ch.Remarks = $('#e__Remarks').value.trim(); run(() => api('updateCandidate', { appNo: curApp, changes: ch }), '#m-c'); };
 $('#cClose').onclick = () => $('#dC').close();
 async function run(fn, msgEl) {
   try { const r = await fn(); if (r && r.message) showMsg($(msgEl), r.message, true); await load(); return r; }
@@ -300,8 +314,10 @@ function openInterview(a) {
   document.querySelectorAll('#iRes [data-d]').forEach(b => b.onclick = async () => {
     const d = b.dataset.d;
     const label = { select: 'Select', probation: 'Select on probation', reject: 'Reject', newRole: 'Move to ' + pName($('#nr').value) }[d];
-    const remarks = prompt(`${label} ${c.Name}? Add a remark (optional):`, ''); if (remarks === null) return;
-    const out = await run(() => api('decideCandidate', { appNo: a, decision: d, remarks, newPosition: d === 'newRole' ? $('#nr').value : '' }), '#m-i');
+    let remarks = '', reason = '';
+    if (d === 'reject') { const x = await askReason({ title: `Reject ${c.Name}`, list: D.lists.REJECT_REASON, reasonLabel: 'Rejection reason', okText: 'Reject', danger: true }); if (!x) return; reason = x.reason; remarks = x.note; }
+    else { remarks = prompt(`${label} ${c.Name}? Add a remark (optional):`, ''); if (remarks === null) return; }
+    const out = await run(() => api('decideCandidate', { appNo: a, decision: d, remarks, reason, newPosition: d === 'newRole' ? $('#nr').value : '' }), '#m-i');
     if (out && (d === 'select' || d === 'probation')) { $('#dI').close(); openOffer(a); }
     else if (out && d === 'reject') $('#dI').close();
   });
@@ -343,6 +359,7 @@ function openOffer(a) {
   if (canJoin) {
     $('#jDate').value = o.EstDOJ || new Date().toISOString().slice(0, 10);
     const stores = D.stores;
+    $('#jTypeBox').innerHTML = listSelect('jType', D.lists.EMPLOYMENT_TYPE, D.lists.EMPLOYMENT_TYPE[0]);
     $('#jStore').innerHTML = stores.map(s => `<option value="${esc(s.StoreCode)}" ${s.StoreCode === c.StoreCode ? 'selected' : ''}>${esc(s.StoreCode)} · ${esc(s.StoreName)}</option>`).join('');
     const fillMgr = () => {
       const parent = pos(o.PositionCode).ParentPositionCode, st = $('#jStore').value;
@@ -355,7 +372,7 @@ function openOffer(a) {
     $('#jId').value = '';
     $('#jGo').onclick = async () => {
       if (!$('#jMgr').value) return showMsg($('#m-o'), 'Choose the reporting manager');
-      const r = await run(() => api('markJoined', { appNo: a, joiningDate: $('#jDate').value, storeCode: $('#jStore').value, reportingManagerId: $('#jMgr').value, employmentType: $('#jType').value, empId: $('#jId').value.trim() }), '#m-o');
+      const r = await run(() => api('markJoined', { appNo: a, joiningDate: $('#jDate').value, storeCode: $('#jStore').value, reportingManagerId: $('#jMgr').value, employmentType: listValue('jType'), empId: $('#jId').value.trim() }), '#m-o');
       if (r && r.empId) { $('#dO').close(); alert(`${c.Name} joined as ${r.empId}.\nOnboarding has started — see "Onboarding & Exit".`); }
     };
   }

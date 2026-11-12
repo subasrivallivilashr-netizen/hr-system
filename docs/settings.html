@@ -10,6 +10,8 @@
     <button data-t="stores">Stores</button>
     <button data-t="users">Users</button>
     <button data-t="files">Files</button>
+    <button data-t="form">Apply form</button>
+    <button data-t="lists">Lists</button>
     <button data-t="me">My password</button>
   </div>
 
@@ -61,8 +63,24 @@
 
     <h2 style="margin-top:24px">Document types</h2>
     <p class="sub">The first three appear on the job application form — choose Mandatory, Optional or Hidden. Add any other documents you keep for employees.</p>
-    <div class="tbl"><table><thead><tr><th>Document</th><th>For</th><th>Application form</th><th>Active</th><th></th></tr></thead><tbody id="dtBody"></tbody></table></div>
+    <div class="tbl-wrap"><table><thead><tr><th>Document</th><th>For</th><th>Application form</th><th>Active</th><th></th></tr></thead><tbody id="dtBody"></tbody></table></div>
     <div class="row-end"><span class="msg" id="m-dt"></span><button type="button" id="dtAdd">+ Add document type</button><button class="btn" id="dtSave">Save document types</button></div>
+  </section>
+
+  <section id="t-form" class="card hidden">
+    <div style="display:flex;justify-content:space-between;align-items:start;gap:8px;flex-wrap:wrap"><div><h2>Apply form questions</h2>
+      <p class="sub">Questions on the QR job application form and the HR walk-in form. Name, mobile and position are always mandatory. Use ↑ ↓ to change the order.</p></div>
+      <a class="btn2" href="apply.html" target="_blank" rel="noopener" style="text-decoration:none;padding:8px 12px;border:1px solid var(--line);border-radius:8px">Preview form ↗</a></div>
+    <div class="tbl-wrap"><table class="qtbl"><thead><tr><th style="width:60px"></th><th>Question</th><th>Section</th><th>Type</th><th>Options / hint</th><th>On the form</th><th></th></tr></thead><tbody id="fqBody"></tbody></table></div>
+    <datalist id="secList"></datalist>
+    <div class="row-end"><span class="msg" id="m-fq"></span><button type="button" id="fqAdd">+ Add question</button><button class="btn" id="fqSave">Save apply form</button></div>
+  </section>
+
+  <section id="t-lists" class="card hidden">
+    <h2>Dropdown lists</h2>
+    <p class="sub">One value per line. Every dropdown also has <b>Other…</b>, where people can type something not in the list — typed values are saved on the record but are not added here. Add a value here only when it is needed regularly.</p>
+    <div class="lists-grid" id="lsBody"></div>
+    <div class="row-end"><span class="msg" id="m-ls"></span><button class="btn" id="lsSave">Save lists</button></div>
   </section>
 
   <section id="t-me" class="card hidden" style="max-width:420px">
@@ -222,5 +240,47 @@ $('#stTest').onclick = async () => { showMsg($('#m-st'), 'Testing…', true); tr
 $('#stClean').onclick = async () => { try { showMsg($('#m-st'), (await api('runFileCleanup')).message, true); } catch (e) { showMsg($('#m-st'), e.message); } };
 $('#stCopy').onclick = () => { navigator.clipboard.writeText($('#stSecret').value); showMsg($('#m-st'), 'Secret copied', true); };
 
-if (S) { load().catch(e => alert(e.message)); loadFiles().catch(e => showMsg($('#m-st'), e.message)); }
+// ---- Apply form
+let FQ = [], FSETUP = null;
+const SYS_TYPES = { Phone: 'Mobile', Position: 'Position list', Store: 'Store list', Source: 'Sources list' };
+async function loadFormSetup() {
+  FSETUP = await api('getFormSetup'); FQ = FSETUP.form.map(q => ({ ...q })); drawFQ(); drawLists();
+}
+function syncFQ() {
+  document.querySelectorAll('#fqBody tr').forEach((tr, i) => { const q = FQ[i];
+    q.Label = $('.qL', tr).value; q.Section = $('.qS', tr).value; if ($('.qT', tr)) q.Type = $('.qT', tr).value;
+    if ($('.qO', tr)) q.Options = $('.qO', tr).value; if ($('.qH', tr)) q.Hint = $('.qH', tr).value; if ($('.qX', tr)) q.Setting = $('.qX', tr).value; });
+}
+function drawFQ() {
+  const locked = FSETUP.locked, sel = (v, arr) => arr.map(a => `<option ${a === v ? 'selected' : ''}>${a}</option>`).join('');
+  $('#secList').innerHTML = [...new Set(FQ.map(q => q.Section))].map(x => `<option value="${esc(x)}">`).join('');
+  $('#fqBody').innerHTML = FQ.map((q, i) => `<tr class="${q.Setting === 'Hidden' ? 'muted-row' : ''}">
+    <td style="white-space:nowrap"><button type="button" class="sm" data-up="${i}" ${i ? '' : 'disabled'} aria-label="Move up">↑</button><button type="button" class="sm" data-dn="${i}" ${i < FQ.length - 1 ? '' : 'disabled'} aria-label="Move down">↓</button></td>
+    <td><input class="qL" value="${esc(q.Label)}"></td>
+    <td><input class="qS" value="${esc(q.Section)}" list="secList"></td>
+    <td>${q.System === 'Yes' ? `<span class="sub">${esc(SYS_TYPES[q.Type] || q.Type)}</span>` : `<select class="qT">${sel(q.Type, FSETUP.types)}</select>`}</td>
+    <td>${q.Type === 'Dropdown' ? `<input class="qO" value="${esc(q.Options)}" placeholder="Option 1, Option 2, …">` : ['Text', 'Number', 'Long text', 'Email', 'Phone'].includes(q.Type) ? `<input class="qH" value="${esc(q.Hint)}" placeholder="Hint (optional)">` : ''}</td>
+    <td>${locked.includes(q.Code) ? '<b>Mandatory</b> <span class="sub">(fixed)</span>' : `<select class="qX">${sel(q.Setting, ['Mandatory', 'Optional', 'Hidden'])}</select>`}</td>
+    <td>${q.System === 'Yes' ? '' : `<button type="button" class="sm danger" data-rm="${i}">Remove</button>`}</td></tr>`).join('');
+  const mv = (i, d) => { syncFQ(); const [x] = FQ.splice(i, 1); FQ.splice(i + d, 0, x); drawFQ(); };
+  document.querySelectorAll('[data-up]').forEach(b => b.onclick = () => mv(+b.dataset.up, -1));
+  document.querySelectorAll('[data-dn]').forEach(b => b.onclick = () => mv(+b.dataset.dn, 1));
+  document.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => { syncFQ(); if (confirm('Remove this question? Answers already given stay in the sheet.')) { FQ.splice(+b.dataset.rm, 1); drawFQ(); } });
+  document.querySelectorAll('.qT, .qX').forEach(x => x.onchange = () => { syncFQ(); drawFQ(); });
+}
+$('#fqAdd').onclick = () => { syncFQ(); FQ.push({ Code: '', Label: '', Section: FQ.length ? FQ[FQ.length - 1].Section : 'A few questions', Type: 'Text', Options: '', Hint: '', Setting: 'Optional', System: 'No' }); drawFQ(); $('#fqBody tr:last-child .qL').focus(); };
+$('#fqSave').onclick = async () => {
+  syncFQ();
+  try { const r = await api('saveApplyForm', { form: FQ }); await loadFormSetup(); showMsg($('#m-fq'), r.message, true); } catch (e) { showMsg($('#m-fq'), e.message); }
+};
+// ---- Lists
+function drawLists() {
+  $('#lsBody').innerHTML = Object.entries(FSETUP.listNames).map(([k, n]) => `<div><label for="ls_${k}">${esc(n)}</label><textarea id="ls_${k}" rows="8">${esc((FSETUP.lists[k] || []).join('\n'))}</textarea></div>`).join('');
+}
+$('#lsSave').onclick = async () => {
+  const lists = {}; Object.keys(FSETUP.listNames).forEach(k => lists[k] = $('#ls_' + k).value.split('\n').map(x => x.trim()).filter(Boolean));
+  try { const r = await api('saveLists', { lists }); await loadFormSetup(); showMsg($('#m-ls'), r.message, true); } catch (e) { showMsg($('#m-ls'), e.message); }
+};
+
+if (S) { loadFormSetup().catch(e => showMsg($('#m-fq'), e.message)); load().catch(e => alert(e.message)); loadFiles().catch(e => showMsg($('#m-st'), e.message)); }
 </script></body></html>

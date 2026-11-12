@@ -37,11 +37,11 @@
     <div><label>Position</label><select name="PositionCode" id="ePos" required></select></div>
     <div style="grid-column:1/-1"><label>Reporting manager <span class="hint" id="mgrHint"></span></label><select name="ReportingManagerId" id="eMgr"></select></div>
     <div><label>Joining date</label><input name="JoiningDate" type="date" required></div>
-    <div><label>Employment type</label><select name="EmploymentType"><option>Permanent</option><option>Contract</option><option>Trainee</option></select></div>
+    <div><label>Employment type</label><div id="eTypeBox"></div></div>
     <div><label>Status</label><select name="Status"><option>Probation</option><option>Confirmed</option><option>Notice Period</option></select></div>
     <div><label>Probation end <span class="hint">(blank = auto)</span></label><input name="ProbationEndDate" type="date"></div>
   </div>
-  <div id="reasonBox" class="hidden"><label>Reason for change of store / position / manager</label><input id="reason" placeholder="e.g. Promotion, Transfer"></div>
+  <div id="reasonBox" class="hidden"><label>Reason for change of store / position / manager</label><div id="reasonSel"></div></div>
   <div class="row-end"><span class="msg" id="m-emp"></span><button value="cancel" formnovalidate>Cancel</button><button class="btn" id="sEmp">Save</button></div>
   <div id="extras" class="hidden">
     <div class="box"><h4>Letters</h4><div class="actions"><select id="lType" style="width:auto"></select><button type="button" id="lGo">Generate</button></div></div>
@@ -115,7 +115,8 @@ function openEmp(e) {
   [...f.elements].forEach(el => { if (el.name) el.value = (e && e[el.name]) ?? (el.tagName === 'SELECT' && el.options.length ? el.options[0].value : ''); });
   f.EmpId.readOnly = !!e;
   fillManagers(e && e.ReportingManagerId);
-  $('#reasonBox').classList.add('hidden'); $('#reason').value = '';
+  $('#reasonBox').classList.add('hidden'); $('#reasonSel').innerHTML = listSelect('reason', D.lists.TRANSFER_REASON, '', { blank: '— Select —' });
+  $('#eTypeBox').innerHTML = listSelect('eType', D.lists.EMPLOYMENT_TYPE, (e && e.EmploymentType) || D.lists.EMPLOYMENT_TYPE[0]);
   $('#dEmpT').textContent = e ? 'Edit ' + e.FullName : 'Add employee'; $('#m-emp').textContent = '';
   $('#extras').classList.toggle('hidden', !e);
   if (e) {
@@ -140,8 +141,10 @@ $('#add').onclick = () => openEmp(null);
 $('#sEmp').onclick = async ev => {
   ev.preventDefault(); const f = $('#fEmp'); if (!f.reportValidity()) return;
   const o = {}; [...f.elements].forEach(el => { if (el.name) o[el.name] = el.value.trim(); });
+  o.EmploymentType = listValue('eType');
+  if (!$('#reasonBox').classList.contains('hidden') && !listValue('reason')) return showMsg($('#m-emp'), 'Choose the reason for the change');
   const b = $('#sEmp'); b.disabled = true;
-  try { const r = await api('saveEmployee', { employee: o, reason: $('#reason').value }); $('#dEmp').close(); await load(); if (!editing) alert('Saved as ' + r.empId); }
+  try { const r = await api('saveEmployee', { employee: o, reason: listValue('reason') }); $('#dEmp').close(); await load(); if (!editing) alert('Saved as ' + r.empId); }
   catch (err) { showMsg($('#m-emp'), err.message); }
   b.disabled = false;
 };

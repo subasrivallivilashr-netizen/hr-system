@@ -69,7 +69,20 @@ export class Hub {
         if (handler.roles && !handler.roles.includes(user.r)) return json({ ok: false, error: 'Not allowed for your role' }, 403);
       }
       const run = () => handler.fn.call(this, body, user);
-      const result = handler.write ? await this.serialWrite(run) : await run();
+      let result;
+      if (handler.write && body.reqId) {
+        // Same click arriving twice (double tap, slow network retry): run once, answer both with the first result
+        this.done = this.done || new Map();
+        const key = (user ? user.u : 'public') + ':' + action + ':' + String(body.reqId).slice(0, 64), now = Date.now();
+        result = await this.serialWrite(async () => {
+          for (const [k, v] of this.done) if (now - v.at > 15 * 60000) this.done.delete(k);
+          const hit = this.done.get(key);
+          if (hit) return { ...hit.result, repeated: true };
+          const out = await run();
+          if (!(out && out.__raw)) this.done.set(key, { at: Date.now(), result: out });
+          return out;
+        });
+      } else result = handler.write ? await this.serialWrite(run) : await run();
       if (result && result.__raw) return result.__raw;
       return json({ ok: true, ...result });
     } catch (e) {
@@ -350,14 +363,21 @@ export class Hub {
     if (new Date(t.ExpiresAt) < new Date()) throw new Error('This link has expired (links are valid for 24 hours). Ask HR for a new one.');
     return t;
   }
-  async createCandidate(c, by, files) {
+  async createCandidate(c, by, files, opt = {}) {
     files = (files || []).filter(f => f && f.data);
     const company0 = await this.companyMap();
-    if (company0.UploadUrl) {
-      const need = (await this.docTypes()).filter(d => CANDIDATE_FORM_DOCS.includes(d.Code) && d.CandidateForm === 'Mandatory' && d.Active !== 'No');
-      const missing = need.filter(d => !files.find(f => String(f.docType).toUpperCase() === d.Code));
-      if (missing.length) throw new Error('Please attach: ' + missing.map(d => d.Name).join(', '));
-    } else files = [];
+    const form = await this.applyForm();
+    c = checkAnswers(form, c);                        // types, dropdown values; throws on a bad value
+    if (!company0.UploadUrl) files = [];
+    const gaps = await this.candidateGaps(c, form, files.map(f => String(f.docType).toUpperCase()));
+    let incomplete = false;
+    if (gaps.length) {
+      const docNames = (await this.docTypes()).map(d => d.Name);
+      const docsMissing = gaps.filter(g => docNames.includes(g)), answersMissing = gaps.filter(g => !docNames.includes(g));
+      if (!opt.hr) throw new Error(answersMissing.length ? 'Please answer: ' + answersMissing.join(', ') : 'Please attach: ' + docsMissing.join(', '));
+      if (!opt.allowIncomplete) return { needConfirm: true, missing: gaps };
+      incomplete = true;
+    }
     files.forEach(f => { f.docType = String(f.docType || '').toUpperCase(); if (!CANDIDATE_FORM_DOCS.includes(f.docType)) throw new Error('Unknown attachment'); checkFile(f); });
     const name = String(c.Name || '').trim(), phone = String(c.Phone || '').replace(/\D/g, '');
     if (!name) throw new Error('Name is required');
@@ -373,17 +393,64 @@ export class Hub {
     await this.setCompany({ [key]: n });
     const now = new Date().toISOString(), row = {};
     CAND_FIELDS.forEach(k => row[k] = String(c[k] ?? '').trim());
+    const custom = form.filter(f => f.System !== 'Yes').map(f => f.Code);
+    await this.ensureColumns('Hiring', 'Candidates', custom.concat(['Incomplete']));
+    custom.forEach(k => row[k] = String(c[k] ?? '').trim());
+    if (incomplete) row.Incomplete = 'Yes';
     Object.assign(row, { AppNo: appNo, Name: name, Phone: phone, PositionCode: pos.PositionCode, Status: 'New', Date: now.slice(0, 10),
       DOB: c.DOB ? normDate(c.DOB) : '', IsDuplicatePhone: dup ? 'Yes' : 'No', CreatedAt: now, UpdatedAt: now, Source: row.Source || 'Walk-in' });
     await this.append('Hiring', 'Candidates', [row]);
-    await this.log('Hiring', appNo, 'Applied', `${pos.PositionName} · ${by}`, by);
+    await this.log('Hiring', appNo, 'Applied', `${pos.PositionName} · ${by}${incomplete ? ' · saved incomplete: ' + gaps.join(', ') : ''}`, by);
     let fileNote = '';
     if (files.length) { try { await this.storeFiles(appNo, 'Candidates/' + appNo, files, by, ''); } catch (e) { fileNote = 'Application saved, but the files could not be uploaded: ' + e.message; } }
-    return { appNo, fileNote, duplicate: dup ? { AppNo: dup.AppNo, Name: dup.Name, Date: dup.Date } : null };
+    return { appNo, fileNote, incomplete, duplicate: dup ? { AppNo: dup.AppNo, Name: dup.Name, Date: dup.Date } : null };
   }
-  async recordRejection(c, stage, remarks, by) {
+  async recordRejection(c, stage, remarks, by, reason) {
+    await this.ensureColumns('Hiring', 'Rejected_Candidates', ['Reason']);
     await this.append('Hiring', 'Rejected_Candidates', [{ AppNo: c.AppNo, Name: c.Name, Phone: c.Phone, PositionCode: c.PositionCode,
-      Source: c.Source, Stage: stage, RejectionDate: new Date().toISOString().slice(0, 10), RejectedBy: by, Remarks: remarks || '' }]);
+      Source: c.Source, Stage: stage, RejectionDate: new Date().toISOString().slice(0, 10), RejectedBy: by, Remarks: remarks || '', Reason: reason || '' }]);
+  }
+
+  // ── Apply form questions & editable lists (Settings sheet) ──
+  async formTabs() {
+    await this.ensureTab('Settings', 'Apply_Form', FORM_HEAD);
+    await this.ensureTab('Settings', 'Lists', ['List', 'Value', 'Order']);
+  }
+  async applyForm() {
+    await this.formTabs();
+    let rows = (await this.read('Settings', 'Apply_Form')).map(clean);
+    if (!rows.length) { rows = defaultForm(); await this.rewriteTab('Settings', 'Apply_Form', rows); }
+    return rows.sort((a, b) => Number(a.Order) - Number(b.Order));
+  }
+  async lists() {
+    await this.formTabs();
+    const rows = (await this.read('Settings', 'Lists')).map(clean), out = {};
+    if (!rows.length) {
+      const seed = []; Object.entries(LIST_DEFS).forEach(([k, d]) => d.values.forEach((v, i) => seed.push({ List: k, Value: v, Order: i + 1 })));
+      await this.rewriteTab('Settings', 'Lists', seed);
+      return this.lists();
+    }
+    Object.keys(LIST_DEFS).forEach(k => {
+      const mine = rows.filter(r => r.List === k).sort((a, b) => Number(a.Order) - Number(b.Order)).map(r => String(r.Value));
+      out[k] = mine.length ? mine : LIST_DEFS[k].values.slice();
+    });
+    return out;
+  }
+  // Mandatory answers / documents still missing for a candidate (used for HR walk-ins saved as Incomplete)
+  async candidateGaps(c, form, uploadedTypes) {
+    const miss = form.filter(f => f.Setting === 'Mandatory' && !FORM_LOCKED.includes(f.Code) && !String(c[f.Code] ?? '').trim()).map(f => f.Label);
+    const company = await this.companyMap();
+    if (company.UploadUrl) {
+      const types = uploadedTypes || (await this.read('Organisation', 'Files').catch(() => [])).filter(x => x.Ref === c.AppNo && x.Status !== 'Deleted').map(x => x.DocType);
+      (await this.docTypes()).filter(d => CANDIDATE_FORM_DOCS.includes(d.Code) && d.CandidateForm === 'Mandatory' && d.Active !== 'No' && !types.includes(d.Code)).forEach(d => miss.push(d.Name));
+    }
+    return miss;
+  }
+  async refreshIncomplete(appNo) {
+    const c = await this.candidate(appNo);
+    if (c.Incomplete !== 'Yes') return;
+    if (!(await this.candidateGaps(c, await this.applyForm())).length)
+      await this.update('Hiring', 'Candidates', 'AppNo', appNo, { Incomplete: '', UpdatedAt: new Date().toISOString() });
   }
   // Template rows; fills the default list the first time
   async checklistTemplate(kind) {
@@ -782,7 +849,7 @@ const ACTIONS = {
       const employees = (await this.read('Organisation', 'Employees')).map(clean);
       const positions = (await this.read('Organisation', 'Positions')).map(clean).filter(p => p.Active !== 'No');
       const stores = (await this.read('Settings', 'Stores')).map(clean).filter(s => s.Active !== 'No');
-      return { employees, positions, stores };
+      return { employees, positions, stores, lists: await this.lists() };
     }
   },
 
@@ -1148,7 +1215,10 @@ const ACTIONS = {
       let uploads = [];
       if (company.UploadUrl) uploads = (await this.docTypes()).filter(d => CANDIDATE_FORM_DOCS.includes(d.Code) && d.CandidateForm !== 'Hidden' && d.Active !== 'No')
         .map(d => ({ Code: d.Code, Name: d.Name, Required: d.CandidateForm === 'Mandatory' }));
-      return { companyName: company.CompanyName || '', positions, stores, uploads };
+      const form = (await this.applyForm()).filter(f => f.Setting !== 'Hidden')
+        .map(f => ({ Code: f.Code, Label: f.Label, Section: f.Section, Type: f.Type, Options: f.Options, Hint: f.Hint, Required: f.Setting === 'Mandatory' }));
+      const L = await this.lists();
+      return { companyName: company.CompanyName || '', positions, stores, uploads, form, lists: { SOURCE: L.SOURCE } };
     }
   },
 
@@ -1157,13 +1227,13 @@ const ACTIONS = {
     write: true,
     fn: async function (p) {
       if (p.website) return { appNo: '' };            // spam trap field, real people leave it empty
-      return this.createCandidate(p.candidate || {}, 'Self (QR form)', p.files);
+      return this.createCandidate(p.candidate || {}, 'Self (QR form)', p.files, { hr: false });
     }
   },
 
   addCandidate: {
     auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR], write: true,
-    fn: async function (p, user) { return this.createCandidate(p.candidate || {}, user.u, p.files); }
+    fn: async function (p, user) { return this.createCandidate(p.candidate || {}, user.u, p.files, { hr: true, allowIncomplete: !!p.allowIncomplete }); }
   },
 
   getHiring: {
@@ -1177,7 +1247,8 @@ const ACTIONS = {
       const stores = (await this.read('Settings', 'Stores')).filter(s => s.Active !== 'No').map(clean);
       const employees = (await this.read('Organisation', 'Employees')).filter(e => e.Status !== 'Exited')
         .map(e => ({ EmpId: e.EmpId, FullName: e.FullName, PositionCode: e.PositionCode, StoreCode: e.StoreCode }));
-      return { candidates, schedule, tokens, scores, offers, questions, positions, stores, employees,
+      const form = await this.applyForm(), lists = await this.lists();
+      return { form, lists, candidates, schedule, tokens, scores, offers, questions, positions, stores, employees,
         passPct: Number(company.InterviewPassPct || 60), idFormat: { prefix: company.EmpIdPrefix, digits: company.EmpIdDigits } };
     }
   },
@@ -1194,8 +1265,16 @@ const ACTIONS = {
     auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR], write: true,
     fn: async function (p, user) {
       const c = await this.candidate(p.appNo);
-      const ch = {};
-      CAND_FIELDS.forEach(k => { if (p.changes && k in p.changes) ch[k] = String(p.changes[k] ?? '').trim(); });
+      const ch = {}, form = await this.applyForm();
+      if (p.changes) {
+        const changed = {};                          // only check values that really changed (old data stays as it is)
+        Object.keys(p.changes).forEach(k => { if (String(p.changes[k] ?? '').trim() !== String(c[k] ?? '').trim()) changed[k] = p.changes[k]; });
+        const typed = checkAnswers(form, changed, true);
+        const custom = form.filter(f => f.System !== 'Yes').map(f => f.Code);
+        if (custom.length) await this.ensureColumns('Hiring', 'Candidates', custom.concat(['Incomplete']));
+        CAND_FIELDS.concat(custom).forEach(k => { if (k in changed) ch[k] = String(typed[k] ?? '').trim(); });
+        if (ch.Name !== undefined && !ch.Name) throw new Error('Name is required');
+      }
       if (ch.Phone !== undefined && !/^\d{10}$/.test(ch.Phone)) throw new Error('Phone must be 10 digits');
       if (ch.DOB) ch.DOB = normDate(ch.DOB);
       if (ch.PositionCode) await this.position(ch.PositionCode);
@@ -1204,12 +1283,14 @@ const ACTIONS = {
           '2nd Call Done': ['Hold', 'Rejected'], 'Interview Scheduled': ['Hold', 'Rejected'], Hold: ['New', 'Rejected'], Rejected: ['New'] };
         if (!(allowed[c.Status] || []).includes(p.status)) throw new Error(`Cannot move from "${c.Status}" to "${p.status}" here`);
         ch.Status = p.status;
-        if (p.status === 'Rejected') await this.recordRejection(c, 'Pre Interview', p.note, user.u);
+        if (p.status === 'Rejected') await this.recordRejection(c, 'Pre Interview', p.note, user.u, p.reason);
       }
       if (p.note) ch.Remarks = p.note;
       ch.UpdatedAt = new Date().toISOString();
+      if (p.reason && p.status) ch.Remarks = p.reason + (p.note ? ' — ' + p.note : '');
       await this.update('Hiring', 'Candidates', 'AppNo', c.AppNo, ch);
-      await this.log('Hiring', c.AppNo, p.status ? 'Status: ' + p.status : 'Details updated', p.note || (p.status ? '' : 'Changed: ' + Object.keys(ch).filter(k => k !== 'UpdatedAt').join(', ')), user.u);
+      await this.log('Hiring', c.AppNo, p.status ? 'Status: ' + p.status : 'Details updated', [p.reason, p.note].filter(Boolean).join(' — ') || (p.status ? '' : 'Changed: ' + Object.keys(ch).filter(k => k !== 'UpdatedAt').join(', ')), user.u);
+      if (p.changes) await this.refreshIncomplete(c.AppNo);
       return { message: 'Saved' };
     }
   },
@@ -1376,9 +1457,10 @@ const ACTIONS = {
         return { message: status };
       }
       if (d === 'reject') {
-        await this.recordRejection(c, 'Post Interview', p.remarks, user.u);
-        await this.update('Hiring', 'Candidates', 'AppNo', c.AppNo, { Status: 'Rejected', Remarks: p.remarks || c.Remarks, UpdatedAt: now });
-        await this.log('Hiring', c.AppNo, 'Rejected after interview', p.remarks || '', user.u);
+        await this.recordRejection(c, 'Post Interview', p.remarks, user.u, p.reason);
+        const why = [p.reason, p.remarks].filter(Boolean).join(' — ');
+        await this.update('Hiring', 'Candidates', 'AppNo', c.AppNo, { Status: 'Rejected', Remarks: why || c.Remarks, UpdatedAt: now });
+        await this.log('Hiring', c.AppNo, 'Rejected after interview', why, user.u);
         return { message: 'Rejected' };
       }
       if (d === 'newRole') {
@@ -1462,7 +1544,7 @@ const ACTIONS = {
       const employees = (await this.read('Organisation', 'Employees')).map(e => ({ EmpId: e.EmpId, FullName: e.FullName, PositionCode: e.PositionCode,
         StoreCode: e.StoreCode, JoiningDate: e.JoiningDate, Status: e.Status, ExitDate: e.ExitDate }));
       const positions = (await this.read('Organisation', 'Positions')).map(p => ({ PositionCode: p.PositionCode, PositionName: p.PositionName }));
-      return { onboarding: out.Onboarding, exit: out.Exit, employees, positions };
+      return { onboarding: out.Onboarding, exit: out.Exit, employees, positions, lists: await this.lists() };
     }
   },
 
@@ -1758,7 +1840,7 @@ const ACTIONS = {
         out.candidates = (await H('Candidates')).map(c => ({ AppNo: c.AppNo, Name: c.Name, PositionCode: c.PositionCode, Source: c.Source, Status: c.Status, Date: c.Date, StoreCode: c.StoreCode }));
         out.schedule = (await H('Interview_Schedule')).map(s => ({ AppNo: s.AppNo, Call1Date: s.Call1Date, Call2Date: s.Call2Date, InterviewDate: s.InterviewDate }));
         out.offers = (await H('Selection_Offer')).map(o => ({ AppNo: o.AppNo, Status: o.Status, CreatedAt: o.CreatedAt, JoiningDate: o.JoiningDate }));
-        out.rejected = (await H('Rejected_Candidates')).map(r => ({ AppNo: r.AppNo, Stage: r.Stage }));
+        out.rejected = (await H('Rejected_Candidates')).map(r => ({ AppNo: r.AppNo, Stage: r.Stage, Reason: r.Reason || '' }));
         for (const kind of ['Onboarding', 'Exit']) out[kind.toLowerCase()] = {
           template: await this.checklistTemplate(kind),
           records: (await this.read('HR_Ops', kind + '_Records')).map(clean),
@@ -1848,6 +1930,7 @@ const ACTIONS = {
         if (it) await this.upsertMany('HR_Ops', kind + '_Items', ['RecordId', 'ItemId'], [{ ...clean(it), FileId: rows[0].FileId }]);
       }
       await this.log(isCand ? 'Hiring' : 'Organisation', ref, 'File uploaded', `${f.docType}: ${f.name}`, user.u);
+      if (isCand) await this.refreshIncomplete(ref);
       return { message: 'Uploaded', file: { ...rows[0], Thumb: undefined } };
     }
   },
@@ -1905,6 +1988,58 @@ const ACTIONS = {
   runFileCleanup: {
     auth: true, roles: [ROLES.SUPER, ROLES.ADMIN], write: true,
     fn: async function (p, user) { return this.purgeRejected(user.u); }
+  },
+
+  getFormSetup: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN],
+    fn: async function () {
+      return { form: await this.applyForm(), lists: await this.lists(), listNames: Object.fromEntries(Object.entries(LIST_DEFS).map(([k, d]) => [k, d.name])),
+        types: FORM_TYPES, locked: FORM_LOCKED };
+    }
+  },
+
+  saveApplyForm: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN], write: true,
+    fn: async function (p, user) {
+      const cur = await this.applyForm(), defs = defaultForm(), rows = [], seen = new Set();
+      (p.form || []).forEach(q => {
+        const label = String(q.Label || '').trim(); if (!label) return;
+        const sys = defs.find(d => d.Code === q.Code);
+        let code = sys ? sys.Code : String(q.Code || '').trim();
+        if (!code || !cur.find(c => c.Code === code)) code = 'Q_' + label.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 24);
+        let k = code, n = 2; while (seen.has(k) || (!sys && defs.find(d => d.Code === k))) k = code + '_' + n++; code = k;
+        seen.add(code);
+        const type = sys ? sys.Type : (FORM_TYPES.includes(q.Type) ? q.Type : 'Text');
+        let setting = ['Mandatory', 'Optional', 'Hidden'].includes(q.Setting) ? q.Setting : 'Optional';
+        if (FORM_LOCKED.includes(code)) setting = 'Mandatory';
+        const opts = String(q.Options || '').split(',').map(x => x.trim()).filter(Boolean);
+        if (type === 'Dropdown' && setting !== 'Hidden' && opts.length < 2) throw new Error(`"${label}": give at least 2 options, separated by commas`);
+        rows.push({ Code: code, Label: label.slice(0, 200), Section: String(q.Section || 'Other').trim().slice(0, 60), Type: type, Options: type === 'Dropdown' ? opts.join(', ') : '',
+          Setting: setting, Order: rows.length + 1, Hint: String(q.Hint || '').slice(0, 120), System: sys ? 'Yes' : 'No' });
+      });
+      defs.forEach(d => { if (!seen.has(d.Code)) rows.push({ ...d, Setting: FORM_LOCKED.includes(d.Code) ? 'Mandatory' : 'Hidden', Order: rows.length + 1 }); });
+      const custom = rows.filter(r => r.System !== 'Yes').map(r => r.Code);
+      if (custom.length) await this.ensureColumns('Hiring', 'Candidates', custom.concat(['Incomplete']));
+      await this.rewriteTab('Settings', 'Apply_Form', rows);
+      await this.log('Settings', 'APPLY_FORM', 'Apply form saved', rows.filter(r => r.Setting !== 'Hidden').length + ' questions shown', user.u);
+      return { message: 'Saved' };
+    }
+  },
+
+  saveLists: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN], write: true,
+    fn: async function (p, user) {
+      await this.formTabs();
+      const rows = [];
+      Object.keys(LIST_DEFS).forEach(k => {
+        const vals = [...new Set(((p.lists || {})[k] || []).map(v => String(v).trim()).filter(v => v && v.toLowerCase() !== 'other'))];
+        if (!vals.length) throw new Error(LIST_DEFS[k].name + ': keep at least one value');
+        vals.forEach((v, i) => rows.push({ List: k, Value: v.slice(0, 80), Order: i + 1 }));
+      });
+      await this.rewriteTab('Settings', 'Lists', rows);
+      await this.log('Settings', 'LISTS', 'Lists saved', rows.length + ' values', user.u);
+      return { message: 'Saved' };
+    }
   },
 
   changeMyPassword: {
@@ -2285,3 +2420,50 @@ function rowsOf(values) {
     return o;
   });
 }
+
+// ── Apply form: built-in questions (System = Yes) ──
+const FORM_HEAD = ['Code', 'Label', 'Section', 'Type', 'Options', 'Setting', 'Order', 'Hint', 'System'];
+const FORM_LOCKED = ['Name', 'Phone', 'PositionCode'];
+const FORM_TYPES = ['Text', 'Long text', 'Number', 'Date', 'Email', 'Dropdown', 'Yes/No'];
+function defaultForm() {
+  const A = 'About you', J = 'The job', E = 'Education & experience', Q = 'A few questions';
+  return [
+    ['Name', 'Full name', A, 'Text', '', 'Mandatory'], ['Phone', 'Mobile number', A, 'Phone', '', 'Mandatory', '10 digits'],
+    ['Gender', 'Gender', A, 'Dropdown', 'Male, Female, Other', 'Optional'], ['DOB', 'Date of birth', A, 'Date', '', 'Optional'],
+    ['Email', 'Email', A, 'Email', '', 'Optional'], ['CityState', 'City / State', A, 'Text', '', 'Optional', 'e.g. Belagavi, Karnataka'],
+    ['Address', 'Address', A, 'Text', '', 'Optional'],
+    ['PositionCode', 'Position applying for', J, 'Position', '', 'Mandatory'], ['StoreCode', 'Preferred location', J, 'Store', '', 'Optional'],
+    ['Source', 'How did you hear about us?', J, 'Source', '', 'Optional'],
+    ['Qualification', 'Highest qualification', E, 'Text', '', 'Optional', 'e.g. 12th, B.Com'], ['Experience', 'Experience', E, 'Text', '', 'Optional', 'e.g. 2 years in retail'],
+    ['Occupation', 'Current occupation', E, 'Text', '', 'Optional', 'e.g. Sales at XYZ, Student'], ['CurrentSalary', 'Current salary (₹/month)', E, 'Number', '', 'Optional'],
+    ['ExpectedSalary', 'Expected salary (₹/month)', E, 'Number', '', 'Optional'], ['NoticePeriod', 'Notice period', E, 'Text', '', 'Optional', 'e.g. Immediate, 15 days'],
+    ['WhyJoin', 'Why do you want to join us?', Q, 'Long text', '', 'Optional'], ['WhyHire', 'Why should we hire you?', Q, 'Long text', '', 'Optional'],
+    ['Value90Days', 'What will you achieve in your first 90 days?', Q, 'Long text', '', 'Optional'],
+    ['WeekendOK', 'Can you work on weekends?', Q, 'Yes/No', '', 'Optional'], ['OwnVehicle', 'Do you have your own vehicle?', Q, 'Yes/No', '', 'Optional'],
+    ['ResumeKey', 'Resume link', Q, 'Text', '', 'Optional', 'Google Drive / LinkedIn link']
+  ].map((f, i) => ({ Code: f[0], Label: f[1], Section: f[2], Type: f[3], Options: f[4], Setting: f[5], Order: i + 1, Hint: f[6] || '', System: 'Yes' }));
+}
+// Cleans and checks typed answers. Throws on a wrong value (not on a missing one).
+function checkAnswers(form, c, partial) {
+  const out = { ...c };
+  form.forEach(f => {
+    if (partial && !(f.Code in c)) return;
+    let v = String(c[f.Code] ?? '').trim(); if (!v) { out[f.Code] = ''; return; }
+    const bad = m => { throw new Error(`${f.Label}: ${m}`); };
+    if (f.Type === 'Number') { v = v.replace(/[,₹\s]/g, ''); if (!/^\d+(\.\d+)?$/.test(v)) bad('enter a number'); }
+    else if (f.Type === 'Email') { if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) bad('enter a valid email'); }
+    else if (f.Type === 'Date') { v = normDate(v); if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) bad('enter a valid date'); }
+    else if (f.Type === 'Yes/No') { if (!['Yes', 'No'].includes(v)) bad('choose Yes or No'); }
+    else if (f.Type === 'Dropdown') { const o = String(f.Options || '').split(',').map(x => x.trim()); if (!o.includes(v)) bad('choose one of the options'); }
+    out[f.Code] = v.slice(0, f.Type === 'Long text' ? 2000 : 300);
+  });
+  return out;
+}
+// Editable dropdown lists (Settings → Lists). "Other" with a typed value is always allowed in the app.
+const LIST_DEFS = {
+  SOURCE: { name: 'Candidate sources', values: ['Walk-in', 'Employee Reference', 'Advertisement', 'Online / Social media'] },
+  REJECT_REASON: { name: 'Rejection reasons', values: ['Not reachable', 'Did not attend interview', 'Salary expectation too high', 'Not suitable for the role', 'Did not clear interview', 'Candidate not interested', 'Location not suitable'] },
+  EXIT_REASON: { name: 'Exit reasons', values: ['Better opportunity', 'Higher studies', 'Relocation', 'Personal / family reasons', 'Health reasons', 'Absconding', 'Terminated', 'Retirement'] },
+  TRANSFER_REASON: { name: 'Transfer / promotion reasons', values: ['Promotion', 'Transfer', 'Store requirement', 'Performance', 'Employee request', 'Re-designation'] },
+  EMPLOYMENT_TYPE: { name: 'Employment types', values: ['Permanent', 'Contract', 'Trainee'] }
+};

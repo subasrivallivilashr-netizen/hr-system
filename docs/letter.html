@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Letter</title><link rel="stylesheet" href="assets/app.css"><style id="lstyle"></style>
+<style>
+body{background:#e9ecf1}.bar{position:sticky;top:0;z-index:5;background:#fff;border-bottom:1px solid var(--line);padding:10px 16px;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.bar h2{margin:0;font-size:15px;flex:1}.wrap{display:grid;grid-template-columns:300px 1fr;gap:16px;padding:16px;align-items:start}
+.side{position:sticky;top:64px}.stage{overflow:auto}
+@media (max-width:900px){.wrap{grid-template-columns:1fr}.side{position:static}.page{transform-origin:top left}}
+@media print{@page{size:A4;margin:0}body{background:#fff}.bar,.side{display:none!important}.wrap{display:block;padding:0}.page{box-shadow:none;margin:0}}
+</style></head>
+<body>
+<div class="bar"><h2 id="hd">Letter</h2><span class="msg" id="m"></span><button id="issue" class="btn">Issue & print</button><button id="print" class="hidden">Print / save PDF</button><button onclick="history.length>1?history.back():close()">Back</button></div>
+<div class="wrap">
+  <aside class="side card" id="side">
+    <h2 style="font-size:14px">Fill in</h2><p class="sub" id="sideNote"></p>
+    <div id="inputs"></div>
+    <div id="prev" class="sub" style="margin-top:12px"></div>
+  </aside>
+  <div class="stage"><div class="page" id="page"></div></div>
+</div>
+<script src="assets/app.js"></script>
+<script src="assets/letter.js"></script>
+<script>
+const S = guard(['SuperAdmin', 'Admin', 'HR']);
+const qs = new URLSearchParams(location.search), type = qs.get('type'), ref = qs.get('ref'), no = qs.get('no');
+let L = null, inputs = {}, issued = null;
+const KNOWN_LATER = ['LetterNo', 'SalaryTable'];
+function draw() {
+  const t = L.template;
+  const fields = { ...L.fields, ...inputs, ...(issued ? { LetterNo: issued } : {}) };
+  $('#page').innerHTML = renderLetter({ brand: L.brand, title: t.Title, body: t.Body, customHtml: t.CustomHTML, fields, salary: L.salary, components: L.components, preview: !issued });
+}
+async function init() {
+  try {
+    if (no) {
+      const r = await api('getIssuedLetter', { letterNo: no });
+      L = { brand: r.brand, components: r.components, salary: r.snapshot.salary, fields: r.snapshot.fields, template: { Title: r.snapshot.title, Body: r.snapshot.body, CustomHTML: r.snapshot.customHtml } };
+      issued = no; $('#hd').textContent = `${r.snapshot.title} · ${no} (copy)`; $('#issue').classList.add('hidden'); $('#print').classList.remove('hidden'); $('#side').classList.add('hidden');
+      document.querySelector('.wrap').style.gridTemplateColumns = '1fr';
+    } else {
+      L = await api('getLetterData', { type, ref });
+      $('#hd').textContent = `${L.template.Title} — ${L.fields.Name || ref}`;
+      const t = (L.template.Body || '') + ' ' + (L.template.CustomHTML || '');
+      const missing = placeholdersIn(t).filter(k => !(k in L.fields) && !KNOWN_LATER.includes(k) && !['Body', 'Logo', 'Signature', 'SignatureBlock', 'Title', 'Header', 'Footer'].includes(k));
+      $('#sideNote').textContent = missing.length ? 'These details are not in the app. Type them here; the letter updates as you type.' : 'All details were filled from the app. Check the letter, then Issue & print.';
+      $('#inputs').innerHTML = missing.map(k => `<label>${esc(k.replace(/([a-z])([A-Z])/g, '$1 $2'))}</label>${/Reason|Areas|Note|Details/.test(k) ? `<textarea data-k="${esc(k)}"></textarea>` : `<input data-k="${esc(k)}">`}`).join('');
+      document.querySelectorAll('[data-k]').forEach(i => i.addEventListener('input', () => { inputs[i.dataset.k] = i.value; draw(); }));
+      if (/SalaryTable/.test(t) && !L.salary) $('#sideNote').textContent += ' Salary is not entered yet — add it first, or the table will be empty.';
+      $('#prev').innerHTML = L.previous.length ? 'Already issued: ' + L.previous.map(p => `<a href="letter.html?no=${encodeURIComponent(p.LetterNo)}">${esc(p.LetterNo)}</a>`).join(', ') : '';
+    }
+    $('#lstyle').textContent = letterStyles(L.brand);
+    draw();
+  } catch (e) { $('#page').innerHTML = `<p class="under">${esc(e.message)}</p>`; $('#issue').disabled = true; }
+}
+$('#issue').onclick = async () => {
+  const empty = [...document.querySelectorAll('[data-k]')].filter(i => !i.value.trim()).map(i => i.dataset.k);
+  if (empty.length && !confirm('These are empty and will be left blank:\n' + empty.join(', ') + '\n\nIssue anyway?')) return;
+  if (!confirm('Issue this letter? It gets the next letter number and is saved in the register.')) return;
+  $('#issue').disabled = true;
+  try {
+    const r = await api('issueLetter', { type, ref, title: L.template.Title, body: L.template.Body, customHtml: L.template.CustomHTML || '', fields: { ...L.fields, ...inputs }, salary: L.salary });
+    issued = r.letterNo; draw();
+    $('#issue').classList.add('hidden'); $('#print').classList.remove('hidden'); showMsg($('#m'), 'Issued ' + r.letterNo, true);
+    setTimeout(() => print(), 300);
+  } catch (e) { showMsg($('#m'), e.message); $('#issue').disabled = false; }
+};
+$('#print').onclick = () => print();
+if (S) init();
+</script></body></html>

@@ -41,6 +41,7 @@ const NAV = [
   { key: 'kpi', label: 'KPIs', href: 'kpi.html', roles: ['SuperAdmin', 'Admin', 'HR', 'Manager'] },
   { key: 'hiring', label: 'Hiring', href: 'hiring.html', roles: ['SuperAdmin', 'Admin', 'HR'] },
   { key: 'lifecycle', label: 'Onboarding & Exit', href: 'lifecycle.html', roles: ['SuperAdmin', 'Admin', 'HR'] },
+  { key: 'letters', label: 'Letters', href: 'letters.html', roles: ['SuperAdmin', 'Admin', 'HR'] },
   { key: 'settings', label: 'Settings', href: 'settings.html', roles: ['SuperAdmin', 'Admin'] }
 ];
 function renderTop(active, companyName) {

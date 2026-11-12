@@ -87,6 +87,8 @@
       <label>Remarks</label><input id="oRem" placeholder="Optional">
       <div class="actions" id="oAct"></div>
     </div>
+    <div class="box"><h4>Salary <span class="hint">(Admin / HR only)</span></h4><div id="oSal"></div></div>
+    <div class="box"><h4>Letters</h4><div class="actions"><button id="oLetter">Offer letter</button><span class="sub" id="oLetterNote"></span></div></div>
     <div class="box hidden" id="joinBox"><h4>Mark joined</h4>
       <p class="sub">Creates the employee record (status: Probation) and starts onboarding.</p>
       <div class="grid">
@@ -111,6 +113,7 @@
 </div></dialog>
 
 <script src="assets/app.js"></script>
+<script src="assets/salary.js"></script>
 <script>
 const S = guard(['SuperAdmin', 'Admin', 'HR']);
 renderTop('hiring');
@@ -196,7 +199,7 @@ function openCand(a) {
     'Shortlisted': [B('Log 1st call', 'call:1', 'btn'), B('Schedule interview', 'call:3'), B('Hold', 'st:Hold'), B('Reject', 'st:Rejected', 'btn-err')],
     '1st Call Done': [B('Log 2nd call', 'call:2', 'btn'), B('Schedule interview', 'call:3'), B('Hold', 'st:Hold'), B('Reject', 'st:Rejected', 'btn-err')],
     '2nd Call Done': [B('Schedule interview', 'call:3', 'btn'), B('Hold', 'st:Hold'), B('Reject', 'st:Rejected', 'btn-err')],
-    'Interview Scheduled': [B('Open interview', 'go:interview', 'btn'), B('Reschedule', 'call:3'), B('Hold', 'st:Hold'), B('Reject', 'st:Rejected', 'btn-err')],
+    'Interview Scheduled': [B('Open interview', 'go:interview', 'btn'), B('Interview call letter', 'go:callletter'), B('Reschedule', 'call:3'), B('Hold', 'st:Hold'), B('Reject', 'st:Rejected', 'btn-err')],
     'Interviewed': [B('Open interview', 'go:interview', 'btn')],
     'Hold': [B('Reactivate', 'st:New', 'btn'), B('Reject', 'st:Rejected', 'btn-err')],
     'Rejected': [B('Re-engage (back to New)', 'st:New', 'btn')]
@@ -215,6 +218,7 @@ function openCand(a) {
 }
 function candAction(c, f) {
   const [kind, arg] = f.split(':');
+  if (f === 'go:callletter') return window.open(`letter.html?type=interview_call&ref=${encodeURIComponent(c.AppNo)}`, '_blank');
   if (kind === 'go') { $('#dC').close(); return arg === 'interview' ? openInterview(c.AppNo) : openOffer(c.AppNo); }
   if (kind === 'st') {
     let note = '';
@@ -352,6 +356,9 @@ function openOffer(a) {
       if (r && r.empId) { $('#dO').close(); alert(`${c.Name} joined as ${r.empId}.\nOnboarding has started — see "Onboarding & Exit".`); }
     };
   }
+  salaryEditor($('#oSal'), a);
+  $('#oLetter').onclick = () => window.open(`letter.html?type=offer&ref=${encodeURIComponent(a)}`, '_blank');
+  $('#oLetterNote').textContent = 'Enter the salary first. Fill notice period and expected joining date, then Save details.';
   $('#m-o').textContent = '';
   $('#dO').open || $('#dO').showModal();
 }

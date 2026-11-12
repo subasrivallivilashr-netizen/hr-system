@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Letters</title><link rel="stylesheet" href="assets/app.css"><style id="lstyle"></style>
+<style>.pv{background:#e9ecf1;border-radius:10px;padding:12px;overflow:auto;max-height:80vh}.pv .page{transform:scale(.62);transform-origin:top left;margin:0;width:210mm}
+.pvbox{height:calc(297mm * .62);width:calc(210mm * .62);overflow:hidden}.imgprev{max-height:60px;max-width:200px;display:block;margin:6px 0;border:1px dashed var(--line);padding:4px}
+.cols{display:grid;grid-template-columns:minmax(320px,1fr) auto;gap:16px;align-items:start}@media (max-width:1000px){.cols{grid-template-columns:1fr}}</style>
+</head>
+<body>
+<header class="top" id="top"></header>
+<main style="max-width:1300px">
+  <div class="tabs" id="tabs">
+    <button data-t="brand" class="on">Letterhead & branding</button>
+    <button data-t="tpl">Letter templates</button>
+    <button data-t="sal">Salary components</button>
+    <button data-t="reg">Letter register</button>
+  </div>
+
+  <section id="t-brand" class="cols">
+    <div class="card">
+      <h2>Letterhead & branding</h2><p class="sub">Used on every letter and report. <span id="roNote"></span></p>
+      <label>Logo <span class="hint">(PNG/JPG — resized automatically)</span></label><input type="file" id="logoF" accept="image/*"><img id="logoP" class="imgprev hidden"><button type="button" id="logoX" class="hidden">Remove logo</button>
+      <div class="grid">
+        <div><label>Logo position</label><select data-b="BrandLogoAlign"><option value="left">Left, name beside it</option><option value="center">Centred above name</option></select></div>
+        <div><label>Brand colour</label><input type="color" data-b="BrandColor" value="#1f3864" style="height:40px"></div>
+        <div><label>Font</label><select data-b="BrandFont"></select></div>
+        <div><label>Page margin (mm)</label><input type="number" data-b="BrandMargin" min="10" max="35" value="18"></div>
+      </div>
+      <label>Header lines (address, phone, GSTIN…) <span class="hint">one per line</span></label><textarea data-b="BrandHeader" rows="3"></textarea>
+      <label>Footer text <span class="hint">bottom of every page</span></label><textarea data-b="BrandFooter" rows="2"></textarea>
+      <div class="grid">
+        <div><label>Signatory name</label><input data-b="BrandSignatoryName"></div>
+        <div><label>Signatory designation</label><input data-b="BrandSignatoryDesignation"></div>
+        <div><label>Letter number prefix</label><input data-b="BrandLetterPrefix" placeholder="e.g. DT"><span class="hint" id="noPrev"></span></div>
+        <div><label>Watermark <span class="hint">(optional)</span></label><input data-b="BrandWatermark" placeholder="e.g. CONFIDENTIAL"></div>
+      </div>
+      <label>Signature image <span class="hint">(optional — scan of the signature)</span></label><input type="file" id="sigF" accept="image/*"><img id="sigP" class="imgprev hidden"><button type="button" id="sigX" class="hidden">Remove signature</button>
+      <div class="row-end"><span class="msg" id="m-b"></span><button class="btn" id="saveB">Save</button></div>
+    </div>
+    <div class="pv"><div class="pvbox"><div class="page" id="bPage"></div></div></div>
+  </section>
+
+  <section id="t-tpl" class="hidden">
+    <div class="split" style="grid-template-columns:260px 1fr">
+      <section class="card"><h2>Letters</h2><ul class="plist" id="tList"></ul><button id="tNew" style="margin-top:10px">+ New letter type</button></section>
+      <section class="cols" id="tEdit"></section>
+    </div>
+  </section>
+
+  <section id="t-sal" class="card hidden" style="max-width:760px">
+    <h2>Salary components</h2><p class="sub">The client's own salary structure. HR enters the amounts per person (monthly). CTC = (earnings + employer contributions) × 12. Visible to Admin and HR only.</p>
+    <table><thead><tr><th>Component</th><th style="width:200px">Type</th><th style="width:100px">Active</th><th style="width:40px"></th></tr></thead><tbody id="sRows"></tbody></table>
+    <div class="row-end"><button id="sAdd">+ Add component</button><span class="msg" id="m-s"></span><button class="btn" id="sSave">Save</button></div>
+  </section>
+
+  <section id="t-reg" class="card hidden">
+    <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><div><h2>Letter register</h2><p class="sub">Every letter issued, with its number. Open any to print a copy.</p></div><div style="min-width:240px"><input id="rq" placeholder="Search number, name, type"></div></div>
+    <div class="tbl-wrap"><table><thead><tr><th>Letter no.</th><th>Letter</th><th>Name</th><th>For</th><th>Issued</th><th>By</th><th></th></tr></thead><tbody id="rRows"></tbody></table></div>
+  </section>
+</main>
+<script src="assets/app.js"></script>
+<script src="assets/letter.js"></script>
+<script>
+const S = guard(['SuperAdmin', 'Admin', 'HR']);
+renderTop('letters');
+const canBrand = S && ['SuperAdmin', 'Admin'].includes(S.role);
+let D = null, brand = {}, curT = null, REG = [];
+const SAMPLE = { CompanyName: 'Your Company', CompanyAddress: '', SignatoryName: '', SignatoryDesignation: '', Today: '12 November 2026', ProbationDays: '90',
+  Salutation: 'Ms.', Name: 'Priya Shetty', FirstName: 'Priya', EmpId: 'DT-00153', AppNo: 'APP-2026-0001', Phone: '9876543210', Email: 'priya@example.com', Address: '12 MG Road', CityState: 'Belagavi, Karnataka',
+  Position: 'Sales Executive', Department: 'Sales', StoreName: 'Main Showroom', StoreCity: 'Belagavi', ReportingManager: 'Suresh Kumar', ReportingManagerPosition: 'Section Incharge',
+  EmploymentType: 'Permanent', JoiningDate: '25 November 2026', ExpectedJoiningDate: '25 November 2026', NoticePeriod: '15 days', ProbationEndDate: '23 February 2027', Tenure: '2 years 3 months',
+  InterviewDate: '13 November 2026', InterviewTime: '11:00', InterviewPlace: 'Main Showroom, 1st floor', CTC: '1,56,000', MonthlyGross: '13,000', MonthlyNet: '13,000', SalaryEffectiveFrom: '25 November 2026',
+  PreviousPosition: 'Sales Executive', NewPosition: 'Section Incharge', PreviousStore: 'Main Showroom', NewStore: 'City Branch', TransferDate: '1 December 2026', TransferReason: 'Promotion',
+  LastWorkingDay: '31 December 2026', ExitReason: 'Relocation' };
+const sampleSalary = () => { const amt = {}; (D.components || []).filter(c => c.Active !== 'No').forEach((c, i) => amt[c.Name] = c.Type === 'Earning' ? [9000, 3000, 1000, 500][i % 4] : 1080);
+  let e = 0, d = 0, m = 0; (D.components || []).forEach(c => { const v = amt[c.Name] || 0; if (c.Type === 'Deduction') d += v; else if (c.Type === 'Employer') m += v; else e += v; });
+  return { Components: amt, MonthlyEarnings: e, MonthlyDeductions: d, MonthlyEmployer: m, MonthlyNet: e - d, AnnualCTC: (e + m) * 12 }; };
+const sampleFields = () => ({ ...SAMPLE, CompanyName: D.companyName || SAMPLE.CompanyName, SignatoryName: brand.BrandSignatoryName, SignatoryDesignation: brand.BrandSignatoryDesignation, CompanyAddress: String(brand.BrandHeader || '').split('\n').filter(Boolean).join(', ') });
+
+document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('#tabs button').forEach(x => x.classList.toggle('on', x === b));
+  ['brand', 'tpl', 'sal', 'reg'].forEach(t => $('#t-' + t).classList.toggle('hidden', t !== b.dataset.t));
+  if (b.dataset.t === 'reg') loadReg();
+});
+
+async function load() {
+  D = await api('getLetterSetup'); D.companyName = (Session.get() || {}).company;
+  brand = { ...D.brand };
+  $('[data-b=BrandFont]').innerHTML = Object.keys(LETTER_FONTS).map(f => `<option>${f}</option>`).join('');
+  document.querySelectorAll('[data-b]').forEach(i => { if (brand[i.dataset.b]) i.value = brand[i.dataset.b]; i.disabled = !canBrand; });
+  ['logoF', 'sigF', 'saveB'].forEach(i => $('#' + i).disabled = !canBrand);
+  $('#roNote').textContent = canBrand ? '' : '(Only Admin can change these.)';
+  showImg('logo', brand.BrandLogo); showImg('sig', brand.BrandSignature);
+  drawBrand(); drawTList(); drawSal();
+}
+function showImg(k, src) { $('#' + k + 'P').classList.toggle('hidden', !src); $('#' + k + 'X').classList.toggle('hidden', !src || !canBrand); if (src) $('#' + k + 'P').src = src; }
+function drawBrand() {
+  document.querySelectorAll('[data-b]').forEach(i => brand[i.dataset.b] = i.value);
+  $('#lstyle').textContent = letterStyles(brand);
+  $('#noPrev').textContent = 'Example: ' + (brand.BrandLetterPrefix || 'HR') + '/OFR/2026/001';
+  const t = D.templates.find(x => x.Type === 'offer') || D.templates[0];
+  $('#bPage').innerHTML = renderLetter({ brand, title: t.Title, body: t.Body, customHtml: t.CustomHTML, fields: sampleFields(), salary: sampleSalary(), components: D.components, preview: true });
+}
+document.querySelectorAll('[data-b]').forEach(i => i.addEventListener('input', drawBrand));
+// Resize an image in the browser so it fits in one sheet cell
+function shrink(file, maxW) {
+  return new Promise((res, rej) => { const img = new Image(), url = URL.createObjectURL(file);
+    img.onload = () => { let w = Math.min(maxW, img.width), out = '';
+      for (let i = 0; i < 6; i++) { const c = document.createElement('canvas'); c.width = w; c.height = Math.round(img.height * w / img.width);
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); out = c.toDataURL('image/png'); if (out.length > 45000) out = c.toDataURL('image/jpeg', .85);
+        if (out.length <= 45000) break; w = Math.round(w * .75); }
+      URL.revokeObjectURL(url); out.length <= 45000 ? res(out) : rej(new Error('Image is too detailed. Try a simpler or smaller image.')); };
+    img.onerror = () => rej(new Error('Not an image')); img.src = url; });
+}
+[['logo', 'BrandLogo', 400], ['sig', 'BrandSignature', 300]].forEach(([k, key, w]) => {
+  $('#' + k + 'F').onchange = async () => { const f = $('#' + k + 'F').files[0]; if (!f) return;
+    try { brand[key] = await shrink(f, w); D.brand[key] = brand[key]; showImg(k, brand[key]); drawBrand(); } catch (e) { alert(e.message); } };
+  $('#' + k + 'X').onclick = () => { brand[key] = ''; D.brand[key] = ''; showImg(k, ''); $('#' + k + 'F').value = ''; drawBrand(); };
+});
+$('#saveB').onclick = async () => {
+  const values = { BrandLogo: brand.BrandLogo || '', BrandSignature: brand.BrandSignature || '' };
+  document.querySelectorAll('[data-b]').forEach(i => values[i.dataset.b] = i.value);
+  try { await api('saveBranding', { values }); showMsg($('#m-b'), 'Saved', true); } catch (e) { showMsg($('#m-b'), e.message); }
+};
+
+// Templates
+function drawTList() {
+  $('#tList').innerHTML = D.templates.map(t => `<li data-t="${esc(t.Type)}" class="${t.Type === curT ? 'on' : ''}"><span>${esc(t.Title)}</span><span class="sub" style="font-size:11px">${t.custom ? 'custom' : t.isDefault ? 'default' : 'edited'}</span></li>`).join('');
+  document.querySelectorAll('#tList li').forEach(li => li.onclick = () => editT(li.dataset.t));
+  if (!curT && D.templates.length) editT(D.templates[0].Type);
+}
+function editT(type, fresh) {
+  curT = type; drawTList();
+  const t = fresh || D.templates.find(x => x.Type === type);
+  const groups = Object.entries(D.fields).map(([g, fs]) => `<optgroup label="${esc(g)}">${fs.map(f => `<option value="${esc(f.split(' ')[0])}">${esc(f)}</option>`).join('')}</optgroup>`).join('');
+  $('#tEdit').innerHTML = `<div class="card">
+      <h2>${esc(t.Title)}</h2><p class="sub">${t.Ref === 'candidate' ? 'Generated for a candidate (from Hiring).' : 'Generated for an employee (from Employees).'} Placeholders like {{Name}} are filled automatically; unknown ones become boxes to type in on the letter screen.</p>
+      <div class="grid"><div><label>Title</label><input id="tTitle" value="${esc(t.Title)}"></div>
+        <div><label>Insert field at cursor</label><select id="tIns"><option value="">— choose —</option>${groups}</select></div></div>
+      <label>Wording <span class="hint">## heading · - bullet · 1. numbered · **bold** · {{SalaryTable}} for the salary break-up</span></label>
+      <textarea id="tBody" class="big" style="min-height:420px">${esc(t.Body)}</textarea>
+      <details style="margin-top:10px"><summary style="cursor:pointer;font-weight:600">Advanced: custom layout (HTML)</summary>
+        <p class="sub">For clients who want their exact letter design. Leave empty to use the standard letterhead layout. Use {{Logo}}, {{Title}}, {{Body}}, {{SalaryTable}}, {{SignatureBlock}}, {{Signature}}, {{Header}}, {{Footer}} and any field.</p>
+        <textarea id="tHtml" class="big" style="min-height:200px">${esc(t.CustomHTML || '')}</textarea></details>
+      <div class="row-end"><span class="msg" id="m-t"></span>${!t.custom && !t.isDefault ? '<button id="tReset">Reset to default</button>' : ''}<button class="btn" id="tSave">Save</button></div>
+    </div>
+    <div class="pv"><div class="pvbox"><div class="page" id="tPage"></div></div></div>`;
+  const pv = () => { $('#lstyle').textContent = letterStyles(brand); $('#tPage').innerHTML = renderLetter({ brand, title: $('#tTitle').value, body: $('#tBody').value, customHtml: $('#tHtml').value, fields: sampleFields(), salary: sampleSalary(), components: D.components, preview: true }); };
+  ['tTitle', 'tBody', 'tHtml'].forEach(i => $('#' + i).addEventListener('input', pv)); pv();
+  $('#tIns').onchange = () => { const v = $('#tIns').value; if (!v) return; const ta = $('#tBody'), s = ta.selectionStart;
+    ta.value = ta.value.slice(0, s) + `{{${v}}}` + ta.value.slice(ta.selectionEnd); ta.focus(); ta.selectionStart = ta.selectionEnd = s + v.length + 4; $('#tIns').value = ''; pv(); };
+  $('#tSave').onclick = async () => { try { await api('saveLetterTemplate', { type, title: $('#tTitle').value, body: $('#tBody').value, customHtml: $('#tHtml').value, ref: t.Ref }); showMsg($('#m-t'), 'Saved', true); await load(); editT(type); } catch (e) { showMsg($('#m-t'), e.message); } };
+  if ($('#tReset')) $('#tReset').onclick = async () => { if (!confirm('Go back to the default wording? Your edits to this letter will be lost.')) return; await api('saveLetterTemplate', { type, title: t.Title, reset: true }); await load(); editT(type); };
+}
+$('#tNew').onclick = () => {
+  const title = prompt('Name of the new letter (e.g. Appreciation Letter):'); if (!title) return;
+  const forWho = confirm('Is this letter for an EMPLOYEE?\nOK = employee, Cancel = candidate') ? 'employee' : 'candidate';
+  const type = title.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 30);
+  if (D.templates.find(t => t.Type === type)) return alert('A letter with this name already exists.');
+  const fresh = { Type: type, Title: title, Ref: forWho, Body: 'Dear {{Salutation}} {{Name}},\n\n', CustomHTML: '', custom: true };
+  D.templates.push(fresh); editT(type, fresh);
+};
+
+// Salary components
+function drawSal() { $('#sRows').innerHTML = ''; (D.components.length ? D.components : [{ Name: 'Basic', Type: 'Earning' }, { Name: 'HRA', Type: 'Earning' }, { Name: 'Special Allowance', Type: 'Earning' }, { Name: 'PF (employee)', Type: 'Deduction' }, { Name: 'ESI (employee)', Type: 'Deduction' }, { Name: 'PF (employer)', Type: 'Employer' }]).forEach(addSal); }
+function addSal(c = {}) {
+  const tr = document.createElement('tr');
+  tr.innerHTML = `<td><input class="sn" value="${esc(c.Name)}" placeholder="e.g. Basic"></td><td><select class="st">${['Earning', 'Deduction', 'Employer'].map(t => `<option value="${t}" ${c.Type === t ? 'selected' : ''}>${{ Earning: 'Earning (paid)', Deduction: 'Deduction (from employee)', Employer: 'Employer contribution (in CTC)' }[t]}</option>`).join('')}</select></td>
+    <td><select class="sa"><option ${c.Active !== 'No' ? 'selected' : ''}>Yes</option><option ${c.Active === 'No' ? 'selected' : ''}>No</option></select></td><td><button type="button">✕</button></td>`;
+  tr.querySelector('button').onclick = () => tr.remove(); $('#sRows').appendChild(tr);
+}
+$('#sAdd').onclick = () => addSal();
+$('#sSave').onclick = async () => { try { await api('saveSalaryComponents', { components: [...document.querySelectorAll('#sRows tr')].map(tr => ({ Name: tr.querySelector('.sn').value, Type: tr.querySelector('.st').value, Active: tr.querySelector('.sa').value })) }); showMsg($('#m-s'), 'Saved', true); await load(); } catch (e) { showMsg($('#m-s'), e.message); } };
+
+// Register
+async function loadReg() { try { REG = (await api('getLettersIssued')).letters; drawReg(); } catch (e) { alert(e.message); } }
+function drawReg() {
+  const q = $('#rq').value.trim().toLowerCase();
+  $('#rRows').innerHTML = REG.filter(l => !q || [l.LetterNo, l.Name, l.Title, l.Ref].join(' ').toLowerCase().includes(q)).map(l => `<tr><td><b>${esc(l.LetterNo)}</b></td><td>${esc(l.Title || l.Type)}</td><td>${esc(l.Name)}</td><td>${esc(l.Ref)}</td><td>${esc(String(l.IssuedOn).slice(0, 10).split('-').reverse().join('-'))}</td><td>${esc(l.IssuedBy)}</td><td><a href="letter.html?no=${encodeURIComponent(l.LetterNo)}" target="_blank">Open</a></td></tr>`).join('')
+    || '<tr><td colspan="7" style="color:var(--muted)">No letters issued yet.</td></tr>';
+}
+$('#rq').addEventListener('input', drawReg);
+if (S) load().catch(e => alert(e.message));
+</script></body></html>

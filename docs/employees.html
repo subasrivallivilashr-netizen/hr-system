@@ -43,6 +43,10 @@
   </div>
   <div id="reasonBox" class="hidden"><label>Reason for change of store / position / manager</label><input id="reason" placeholder="e.g. Promotion, Transfer"></div>
   <div class="row-end"><span class="msg" id="m-emp"></span><button value="cancel" formnovalidate>Cancel</button><button class="btn" id="sEmp">Save</button></div>
+  <div id="extras" class="hidden">
+    <div class="box"><h4>Letters</h4><div class="actions"><select id="lType" style="width:auto"></select><button type="button" id="lGo">Generate</button></div></div>
+    <details class="box"><summary style="cursor:pointer;font-weight:600;color:var(--brand)">Salary (Admin / HR only)</summary><div id="eSal" style="margin-top:8px"></div></details>
+  </div>
 </form></dialog>
 
 <dialog id="dImp"><form method="dialog">
@@ -53,6 +57,7 @@
 </form></dialog>
 
 <script src="assets/app.js"></script>
+<script src="assets/salary.js"></script>
 <script>
 const S = guard(['SuperAdmin', 'Admin', 'HR', 'Manager']);
 renderTop('employees');
@@ -110,6 +115,14 @@ function openEmp(e) {
   fillManagers(e && e.ReportingManagerId);
   $('#reasonBox').classList.add('hidden'); $('#reason').value = '';
   $('#dEmpT').textContent = e ? 'Edit ' + e.FullName : 'Add employee'; $('#m-emp').textContent = '';
+  $('#extras').classList.toggle('hidden', !e);
+  if (e) {
+    const L = [['appointment', 'Appointment letter'], ['confirmation', 'Confirmation letter'], ['probation_extension', 'Probation extension'], ['transfer', 'Promotion / transfer letter'], ['warning', 'Warning letter'], ['experience', 'Experience certificate'], ['relieving', 'Relieving letter']];
+    $('#lType').innerHTML = L.map(([k, l]) => `<option value="${k}">${l}</option>`).join('') + (window.CUSTOM_LETTERS || []).map(t => `<option value="${esc(t.Type)}">${esc(t.Title)}</option>`).join('');
+    $('#lGo').onclick = () => window.open(`letter.html?type=${encodeURIComponent($('#lType').value)}&ref=${encodeURIComponent(e.EmpId)}`, '_blank');
+    const det = document.querySelector('#extras details'); det.open = false;
+    det.ontoggle = () => { if (det.open) salaryEditor($('#eSal'), e.EmpId); };
+  }
   $('#dEmp').showModal();
 }
 ['eStore', 'ePos'].forEach(id => $('#' + id).addEventListener('change', () => { fillManagers(); checkMove(); }));
@@ -164,5 +177,6 @@ $('#goImp').onclick = async ev => {
   b.textContent = 'Import';
 };
 
+if (S && canEdit) api('getLetterSetup').then(r => window.CUSTOM_LETTERS = r.templates.filter(t => t.custom && t.Ref === 'employee')).catch(() => {});
 if (S) load().catch(e => alert(e.message));
 </script></body></html>

@@ -375,6 +375,72 @@ export class Hub {
     return rec;
   }
 
+  // Creates a tab (with headings) if it does not exist yet
+  async ensureTab(module, tab, headers) {
+    this.tabsOk = this.tabsOk || new Set();
+    if (this.tabsOk.has(module + '/' + tab)) return;
+    const id = await this.ssId(module);
+    const meta = await this.gfetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}?fields=sheets.properties`);
+    if (!(meta.sheets || []).find(s => s.properties.title === tab)) {
+      await this.gfetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}:batchUpdate`, { method: 'POST',
+        body: JSON.stringify({ requests: [{ addSheet: { properties: { title: tab, gridProperties: { rowCount: 1000, columnCount: Math.max(12, headers.length) } } } }] }) });
+      await this.gfetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}/values/${encodeURIComponent(tab)}!A1?valueInputOption=RAW`,
+        { method: 'PUT', body: JSON.stringify({ values: [headers] }) });
+      if (this.headCache) this.headCache.delete(module + '/' + tab);
+      this.cache.delete(module + '/' + tab);
+    }
+    this.tabsOk.add(module + '/' + tab);
+  }
+  async letterTabs() {
+    await this.ensureTab('Settings', 'Letter_Templates', ['Type', 'Title', 'Ref', 'Body', 'CustomHTML', 'UpdatedBy', 'UpdatedAt']);
+    await this.ensureTab('Settings', 'Salary_Components', ['Name', 'Type', 'Order', 'Active']);
+    await this.ensureTab('Organisation', 'Salary', ['Ref', 'Components', 'MonthlyEarnings', 'MonthlyDeductions', 'MonthlyEmployer', 'MonthlyNet', 'AnnualCTC', 'EffectiveFrom', 'UpdatedBy', 'UpdatedAt']);
+    await this.ensureTab('Library', 'Letters_Issued', ['LetterNo', 'Type', 'Ref', 'Name', 'Title', 'IssuedOn', 'IssuedBy', 'Snapshot']);
+  }
+  async salaryOf(ref) {
+    const r = (await this.read('Organisation', 'Salary')).find(s => s.Ref === ref);
+    return r ? { ...clean(r), Components: parseJSON(r.Components) || {} } : null;
+  }
+  // Known placeholder values for a candidate (AppNo) or employee (EmpId)
+  async letterFields(kind, ref, company) {
+    const f = { CompanyName: company.CompanyName || '', CompanyAddress: String(company.BrandHeader || '').split('\n').filter(Boolean).join(', '),
+      SignatoryName: company.BrandSignatoryName || '', SignatoryDesignation: company.BrandSignatoryDesignation || '', Today: longDate(new Date()),
+      ProbationDays: company.ProbationDays || '' };
+    const positions = await this.read('Organisation', 'Positions'), stores = await this.read('Settings', 'Stores');
+    const P = c => positions.find(p => p.PositionCode === c) || {}, ST = c => stores.find(s => s.StoreCode === c) || {};
+    const person = (x) => { f.Name = x.Name || x.FullName; f.FirstName = String(f.Name || '').split(' ')[0]; f.Salutation = x.Gender === 'Female' ? 'Ms.' : x.Gender === 'Male' ? 'Mr.' : '';
+      f.Phone = x.Phone || ''; f.Email = x.Email || ''; };
+    if (kind === 'candidate') {
+      const c = await this.candidate(ref); person(c);
+      Object.assign(f, { AppNo: c.AppNo, Address: c.Address || '', CityState: c.CityState || '', Position: P(c.PositionCode).PositionName || c.PositionCode,
+        Department: P(c.PositionCode).Department || '', StoreName: ST(c.StoreCode).StoreName || '', StoreCity: ST(c.StoreCode).City || '', NoticePeriod: c.NoticePeriod || '' });
+      const s = (await this.read('Hiring', 'Interview_Schedule')).find(x => x.AppNo === ref) || {};
+      if (s.InterviewDate) { const [d, t] = String(s.InterviewDate).split('T'); f.InterviewDate = longDate(d); f.InterviewTime = t ? t.slice(0, 5) : ''; f.InterviewPlace = s.InterviewRemarks || ''; }
+      const o = (await this.read('Hiring', 'Selection_Offer')).find(x => x.AppNo === ref) || {};
+      if (o.EstDOJ) f.ExpectedJoiningDate = longDate(o.EstDOJ);
+      if (o.NoticePeriod) f.NoticePeriod = o.NoticePeriod;
+    } else {
+      const emps = await this.read('Organisation', 'Employees');
+      const e = emps.find(x => x.EmpId === ref); if (!e) throw new Error('Employee not found: ' + ref);
+      person(e);
+      const m = emps.find(x => x.EmpId === e.ReportingManagerId) || {};
+      Object.assign(f, { EmpId: e.EmpId, Position: P(e.PositionCode).PositionName || e.PositionCode, Department: P(e.PositionCode).Department || '',
+        StoreName: ST(e.StoreCode).StoreName || '', StoreCity: ST(e.StoreCode).City || '', ReportingManager: m.FullName || '', ReportingManagerPosition: P(m.PositionCode).PositionName || '',
+        JoiningDate: longDate(e.JoiningDate), ProbationEndDate: longDate(e.ProbationEndDate), EmploymentType: e.EmploymentType || '', Tenure: tenure(e.JoiningDate, e.ExitDate) });
+      if (e.CandidateAppNo) { const c = (await this.read('Hiring', 'Candidates')).find(x => x.AppNo === e.CandidateAppNo); if (c) { f.Address = c.Address || ''; f.CityState = c.CityState || ''; } }
+      const ex = (await this.read('HR_Ops', 'Exit_Records')).filter(r => r.EmpId === e.EmpId).sort((a, b) => (a.CreatedAt < b.CreatedAt ? 1 : -1))[0];
+      if (ex) { f.LastWorkingDay = longDate(ex.LastWorkingDay); f.ExitReason = ex.Reason || ''; }
+      else if (e.ExitDate) f.LastWorkingDay = longDate(e.ExitDate);
+      const tr = (await this.read('Organisation', 'TransferHistory')).filter(t => t.EmpId === e.EmpId).sort((a, b) => (a.Date < b.Date ? 1 : -1))[0];
+      if (tr) Object.assign(f, { PreviousPosition: P(tr.FromPosition).PositionName || tr.FromPosition, NewPosition: P(tr.ToPosition).PositionName || tr.ToPosition,
+        PreviousStore: ST(tr.FromStore).StoreName || tr.FromStore, NewStore: ST(tr.ToStore).StoreName || tr.ToStore, TransferDate: longDate(tr.Date), TransferReason: tr.Reason || '' });
+    }
+    const sal = await this.salaryOf(ref);
+    if (sal) Object.assign(f, { CTC: inr(sal.AnnualCTC), MonthlyGross: inr(sal.MonthlyEarnings), MonthlyNet: inr(sal.MonthlyNet), SalaryEffectiveFrom: longDate(sal.EffectiveFrom) });
+    Object.keys(f).forEach(k => { if (f[k] === '' || f[k] === undefined || f[k] === null) delete f[k]; });
+    return f;
+  }
+
   async log(module, recordId, action, remarks, doneBy) {
     try {
       await this.append('ActivityLog', 'Activity_Log', [{ Timestamp: new Date().toISOString(), Module: module, RecordId: recordId, Action: action, Remarks: remarks, DoneBy: doneBy }]);
@@ -1275,6 +1341,9 @@ const ACTIONS = {
       const off = clean((await this.read('Hiring', 'Selection_Offer')).find(x => x.AppNo === c.AppNo) || { AppNo: c.AppNo, Name: c.Name, PositionCode: c.PositionCode, CreatedAt: now });
       await this.upsertMany('Hiring', 'Selection_Offer', ['AppNo'], [{ ...off, Status: 'Joined', JoiningDate: e.JoiningDate, UpdatedAt: now }]);
       await this.update('Hiring', 'Candidates', 'AppNo', c.AppNo, { Status: 'Joined', UpdatedAt: now });
+      await this.letterTabs();
+      const candSal = (await this.read('Organisation', 'Salary')).find(x => x.Ref === c.AppNo);
+      if (candSal) await this.upsertMany('Organisation', 'Salary', ['Ref'], [{ ...clean(candSal), Ref: e.EmpId, EffectiveFrom: e.JoiningDate, UpdatedAt: now }]);
       const ob = await this.startChecklist('Onboarding', e, null);
       await this.log('Hiring', c.AppNo, 'Joined', `Employee ${e.EmpId}`, user.u);
       await this.log('Organisation', e.EmpId, 'Employee added (joined)', `${e.FullName} from ${c.AppNo}`, user.u);
@@ -1394,6 +1463,162 @@ const ACTIONS = {
     }
   },
 
+  // ═════════════ LETTERS ═════════════
+  getLetterSetup: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR],
+    fn: async function () {
+      await this.letterTabs();
+      const company = await this.companyMap();
+      const brand = {}; BRAND_KEYS.forEach(k => brand[k] = company[k] || '');
+      const saved = (await this.read('Settings', 'Letter_Templates')).map(clean);
+      const templates = LETTER_TYPES.map(t => ({ ...t, ...(saved.find(s => s.Type === t.Type) || {}), isDefault: !saved.find(s => s.Type === t.Type) }))
+        .concat(saved.filter(s => !LETTER_TYPES.find(t => t.Type === s.Type)).map(s => ({ ...s, Ref: 'employee', custom: true })));
+      const components = (await this.read('Settings', 'Salary_Components')).map(clean).sort((a, b) => Number(a.Order) - Number(b.Order));
+      return { brand, templates, components, fields: LETTER_FIELDS };
+    }
+  },
+
+  saveBranding: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN], write: true,
+    fn: async function (p, user) {
+      const vals = {};
+      for (const k of BRAND_KEYS) if (p.values && k in p.values) {
+        const v = String(p.values[k] ?? '');
+        if (v.length > 48000) throw new Error(`${k.replace('Brand', '')} is too large. Use a smaller image.`);
+        vals[k] = v;
+      }
+      await this.setCompany(vals);
+      await this.log('Settings', 'BRANDING', 'Letterhead updated', Object.keys(vals).join(', '), user.u);
+      return { message: 'Saved' };
+    }
+  },
+
+  saveLetterTemplate: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR], write: true,
+    fn: async function (p, user) {
+      await this.letterTabs();
+      const type = String(p.type || '').trim();
+      if (!/^[a-z0-9_]+$/.test(type)) throw new Error('Letter type code: small letters, numbers and _ only');
+      if (!String(p.title || '').trim()) throw new Error('Title is required');
+      if (String(p.body || '').length > 45000 || String(p.customHtml || '').length > 45000) throw new Error('Template is too long');
+      if (p.reset) {
+        const left = (await this.read('Settings', 'Letter_Templates')).map(clean).filter(t => t.Type !== type);
+        await this.rewriteTab('Settings', 'Letter_Templates', left);
+        await this.log('Settings', type, 'Letter template reset to default', '', user.u);
+        return { message: 'Reset to default wording' };
+      }
+      await this.upsertMany('Settings', 'Letter_Templates', ['Type'], [{ Type: type, Title: p.title.trim(), Body: p.body || '', CustomHTML: p.customHtml || '',
+        Ref: p.ref === 'candidate' ? 'candidate' : 'employee', UpdatedBy: user.u, UpdatedAt: new Date().toISOString() }]);
+      await this.log('Settings', type, 'Letter template saved', p.title, user.u);
+      return { message: 'Saved' };
+    }
+  },
+
+  saveSalaryComponents: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR], write: true,
+    fn: async function (p, user) {
+      await this.letterTabs();
+      const rows = (p.components || []).filter(c => String(c.Name || '').trim()).map((c, i) => ({
+        Name: String(c.Name).trim(), Type: ['Earning', 'Deduction', 'Employer'].includes(c.Type) ? c.Type : 'Earning', Order: i + 1, Active: c.Active === 'No' ? 'No' : 'Yes' }));
+      const names = rows.map(r => r.Name.toLowerCase());
+      if (new Set(names).size !== names.length) throw new Error('Component names must be unique');
+      await this.rewriteTab('Settings', 'Salary_Components', rows);
+      await this.log('Settings', 'SALARY', 'Salary components saved', rows.length + ' components', user.u);
+      return { message: 'Saved' };
+    }
+  },
+
+  // ref = AppNo (candidate) or EmpId
+  getSalary: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR],
+    fn: async function (p) {
+      await this.letterTabs();
+      const components = (await this.read('Settings', 'Salary_Components')).map(clean).filter(c => c.Active !== 'No').sort((a, b) => a.Order - b.Order);
+      return { components, salary: await this.salaryOf(p.ref) };
+    }
+  },
+
+  saveSalary: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR], write: true,
+    fn: async function (p, user) {
+      await this.letterTabs();
+      const ref = String(p.ref || '');
+      const isCand = ref.startsWith('APP-');
+      if (isCand) await this.candidate(ref);
+      else if (!(await this.read('Organisation', 'Employees')).find(e => e.EmpId === ref)) throw new Error('Employee not found');
+      const comps = (await this.read('Settings', 'Salary_Components')).filter(c => c.Active !== 'No');
+      if (!comps.length) throw new Error('Set up salary components first (Settings → Salary components)');
+      const amounts = {};
+      comps.forEach(c => { const v = p.amounts ? p.amounts[c.Name] : ''; if (v !== '' && v !== undefined && v !== null) { if (isNaN(Number(v)) || Number(v) < 0) throw new Error(c.Name + ': enter a valid amount'); amounts[c.Name] = Number(v); } });
+      const row = salaryRow(ref, amounts, comps, p.effectiveFrom, user.u);
+      await this.upsertMany('Organisation', 'Salary', ['Ref'], [row]);
+      await this.log(isCand ? 'Hiring' : 'Organisation', ref, 'Salary saved', `CTC ${row.AnnualCTC}`, user.u);
+      return { message: `Saved · CTC ₹${Number(row.AnnualCTC).toLocaleString('en-IN')} per year`, salary: row };
+    }
+  },
+
+  // Everything a letter needs: template, branding, known fields, salary
+  getLetterData: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR],
+    fn: async function (p) {
+      await this.letterTabs();
+      const type = String(p.type || '');
+      const saved = (await this.read('Settings', 'Letter_Templates')).find(s => s.Type === type);
+      const def = LETTER_TYPES.find(t => t.Type === type);
+      if (!saved && !def) throw new Error('Unknown letter type: ' + type);
+      const tpl = { ...(def || { Ref: 'employee' }), ...(saved ? clean(saved) : {}) };
+      const company = await this.companyMap();
+      const brand = {}; BRAND_KEYS.forEach(k => brand[k] = company[k] || '');
+      const fields = await this.letterFields(tpl.Ref, p.ref, company);
+      const salary = await this.salaryOf(p.ref);
+      const prev = (await this.read('Library', 'Letters_Issued')).filter(l => l.Ref === p.ref && l.Type === type).map(l => ({ LetterNo: l.LetterNo, IssuedOn: l.IssuedOn, IssuedBy: l.IssuedBy }));
+      const components = (await this.read('Settings', 'Salary_Components')).map(clean).sort((x, y) => x.Order - y.Order);
+      return { template: tpl, brand, fields, salary, components, previous: prev };
+    }
+  },
+
+  issueLetter: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR], write: true,
+    fn: async function (p, user) {
+      await this.letterTabs();
+      if (!p.type || !p.ref) throw new Error('Letter type and person are required');
+      const company = await this.companyMap(), year = new Date().getFullYear(), key = 'LetterNext_' + year;
+      const n = Number(company[key] || 1);
+      const prefix = (company.BrandLetterPrefix || 'HR').trim();
+      const code = (LETTER_TYPES.find(t => t.Type === p.type) || {}).Code || p.type.slice(0, 3).toUpperCase();
+      const letterNo = `${prefix}/${code}/${year}/${String(n).padStart(3, '0')}`;
+      await this.setCompany({ [key]: n + 1 });
+      const now = new Date().toISOString();
+      const snapshot = JSON.stringify({ title: p.title || '', body: p.body || '', customHtml: p.customHtml || '', fields: { ...(p.fields || {}), LetterNo: letterNo }, salary: p.salary || null });
+      if (snapshot.length > 48000) throw new Error('Letter is too long to store');
+      await this.append('Library', 'Letters_Issued', [{ LetterNo: letterNo, Type: p.type, Ref: p.ref, Name: (p.fields || {}).Name || '', Title: p.title || '', IssuedOn: now, IssuedBy: user.u, Snapshot: snapshot }]);
+      await this.log(String(p.ref).startsWith('APP-') ? 'Hiring' : 'Organisation', p.ref, 'Letter issued', `${p.title || p.type} · ${letterNo}`, user.u);
+      return { letterNo, issuedOn: now };
+    }
+  },
+
+  getLettersIssued: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR],
+    fn: async function (p) {
+      await this.letterTabs();
+      const rows = (await this.read('Library', 'Letters_Issued')).filter(l => !p.ref || l.Ref === p.ref)
+        .map(l => ({ LetterNo: l.LetterNo, Type: l.Type, Ref: l.Ref, Name: l.Name, Title: l.Title, IssuedOn: l.IssuedOn, IssuedBy: l.IssuedBy }));
+      return { letters: rows.sort((a, b) => (a.IssuedOn < b.IssuedOn ? 1 : -1)) };
+    }
+  },
+
+  getIssuedLetter: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR],
+    fn: async function (p) {
+      const l = (await this.read('Library', 'Letters_Issued')).find(x => x.LetterNo === p.letterNo);
+      if (!l) throw new Error('Letter not found');
+      const company = await this.companyMap();
+      const brand = {}; BRAND_KEYS.forEach(k => brand[k] = company[k] || '');
+      const components = (await this.read('Settings', 'Salary_Components')).map(clean).sort((x, y) => x.Order - y.Order);
+      return { letter: { ...clean(l), Snapshot: undefined }, snapshot: parseJSON(l.Snapshot), brand, components };
+    }
+  },
+
   changeMyPassword: {
     auth: true, write: true,
     fn: async function (p, user) {
@@ -1410,6 +1635,139 @@ const ACTIONS = {
 
 
 // ───────────────────────── Helpers ─────────────────────────
+const BRAND_KEYS = ['BrandLogo', 'BrandSignature', 'BrandColor', 'BrandFont', 'BrandHeader', 'BrandFooter', 'BrandSignatoryName', 'BrandSignatoryDesignation',
+  'BrandLetterPrefix', 'BrandMargin', 'BrandWatermark', 'BrandLogoAlign'];
+const LETTER_FIELDS = {
+  'Company': ['CompanyName', 'CompanyAddress', 'SignatoryName', 'SignatoryDesignation', 'Today', 'LetterNo'],
+  'Person': ['Salutation', 'Name', 'FirstName', 'EmpId', 'AppNo', 'Phone', 'Email', 'Address', 'CityState'],
+  'Job': ['Position', 'Department', 'StoreName', 'StoreCity', 'ReportingManager', 'ReportingManagerPosition', 'EmploymentType', 'JoiningDate', 'ExpectedJoiningDate', 'NoticePeriod', 'ProbationDays', 'ProbationEndDate', 'Tenure'],
+  'Interview': ['InterviewDate', 'InterviewTime', 'InterviewPlace'],
+  'Salary': ['CTC', 'MonthlyGross', 'MonthlyNet', 'SalaryEffectiveFrom', 'SalaryTable'],
+  'Move / exit': ['PreviousPosition', 'NewPosition', 'PreviousStore', 'NewStore', 'TransferDate', 'TransferReason', 'LastWorkingDay', 'ExitReason'],
+  'Typed on the letter screen': ['AnyNewName — e.g. {{WarningReason}}, {{NewProbationEndDate}}']
+};
+const LETTER_TYPES = [
+  { Type: 'interview_call', Code: 'INT', Ref: 'candidate', Title: 'Interview Call Letter', Body:
+`Dear {{Salutation}} {{Name}},
+
+Thank you for applying for the position of **{{Position}}** at {{CompanyName}}.
+
+We are pleased to invite you for an interview as per the details below:
+
+- **Date:** {{InterviewDate}}
+- **Time:** {{InterviewTime}}
+- **Venue:** {{InterviewPlace}}
+
+Please bring a copy of your resume, one passport-size photograph and your ID proof. Kindly report 10 minutes before the scheduled time.
+
+We look forward to meeting you.` },
+  { Type: 'offer', Code: 'OFR', Ref: 'candidate', Title: 'Offer Letter', Body:
+`Dear {{Salutation}} {{Name}},
+
+With reference to your application and the subsequent interview, we are pleased to offer you the position of **{{Position}}** at {{CompanyName}}, {{StoreName}}.
+
+## Terms of the offer
+1. Your expected date of joining is **{{ExpectedJoiningDate}}**.
+2. Your annual Cost to Company (CTC) will be **₹{{CTC}}**. The salary break-up is given below.
+3. You will be on probation for **{{ProbationDays}} days** from the date of joining.
+4. Your working hours, weekly off and other terms will be as per company policy.
+
+{{SalaryTable}}
+
+Please sign and return a copy of this letter as a token of your acceptance. This offer is valid for 7 days from the date of this letter.
+
+We welcome you to the {{CompanyName}} family.` },
+  { Type: 'appointment', Code: 'APT', Ref: 'employee', Title: 'Appointment Letter', Body:
+`Dear {{Salutation}} {{Name}},
+
+We are pleased to appoint you as **{{Position}}** at {{CompanyName}}, {{StoreName}}, with effect from **{{JoiningDate}}**. Your employee ID is **{{EmpId}}**.
+
+## Terms of appointment
+1. **Reporting:** You will report to {{ReportingManager}} ({{ReportingManagerPosition}}).
+2. **Probation:** You will be on probation until {{ProbationEndDate}}. On successful completion, your services will be confirmed in writing.
+3. **Compensation:** Your annual CTC is ₹{{CTC}}, as per the break-up below.
+4. **Notice period:** During probation, either party may end the employment with 7 days' notice; after confirmation, 30 days' notice is required.
+5. **Conduct:** You will follow the company's Code of Conduct and all policies as amended from time to time.
+
+{{SalaryTable}}
+
+Please sign the duplicate copy of this letter as your acceptance of the above terms.` },
+  { Type: 'confirmation', Code: 'CNF', Ref: 'employee', Title: 'Confirmation Letter', Body:
+`Dear {{Salutation}} {{Name}},
+
+We are pleased to inform you that, on successful completion of your probation period, your services as **{{Position}}** ({{EmpId}}) are confirmed with effect from **{{ProbationEndDate}}**.
+
+All other terms and conditions of your appointment remain unchanged.
+
+We appreciate your contribution and wish you continued success with {{CompanyName}}.` },
+  { Type: 'probation_extension', Code: 'PRX', Ref: 'employee', Title: 'Probation Extension Letter', Body:
+`Dear {{Salutation}} {{Name}},
+
+Your probation period as **{{Position}}** ({{EmpId}}) was due to end on {{ProbationEndDate}}. Following a review of your performance, your probation is extended until **{{NewProbationEndDate}}**.
+
+Areas for improvement during this period:
+{{ImprovementAreas}}
+
+Your reporting manager, {{ReportingManager}}, will support you and review your progress. All other terms of your appointment remain unchanged.` },
+  { Type: 'transfer', Code: 'TRF', Ref: 'employee', Title: 'Promotion / Transfer Letter', Body:
+`Dear {{Salutation}} {{Name}},
+
+We are pleased to inform you that with effect from **{{TransferDate}}**, you are moved from **{{PreviousPosition}}** at {{PreviousStore}} to **{{NewPosition}}** at {{NewStore}}.
+
+Reason: {{TransferReason}}
+
+You will report to {{ReportingManager}} ({{ReportingManagerPosition}}). {{SalaryChangeNote}}
+
+All other terms and conditions of your employment remain unchanged. We wish you success in your new role.` },
+  { Type: 'warning', Code: 'WRN', Ref: 'employee', Title: 'Warning Letter', Body:
+`Dear {{Salutation}} {{Name}},
+
+This letter is a formal warning regarding the following:
+
+{{WarningReason}}
+
+This is not in line with the company's Code of Conduct and policies. You are advised to correct this immediately. Any repetition may lead to further disciplinary action as per the Disciplinary Action Policy.
+
+Please sign the copy of this letter as acknowledgement of receipt.` },
+  { Type: 'experience', Code: 'EXP', Ref: 'employee', Title: 'Experience Certificate', Body:
+`## TO WHOMSOEVER IT MAY CONCERN
+
+This is to certify that **{{Salutation}} {{Name}}** (Employee ID {{EmpId}}) was employed with {{CompanyName}} from **{{JoiningDate}}** to **{{LastWorkingDay}}** ({{Tenure}}).
+
+At the time of leaving, {{FirstName}} was working as **{{Position}}** at {{StoreName}}.
+
+During this period, we found {{FirstName}} sincere and hardworking. We wish {{FirstName}} all the best for the future.` },
+  { Type: 'relieving', Code: 'RLV', Ref: 'employee', Title: 'Relieving Letter', Body:
+`Dear {{Salutation}} {{Name}},
+
+This is with reference to your resignation. We confirm that you are relieved from your duties as **{{Position}}** (Employee ID {{EmpId}}) at {{CompanyName}} at the close of business on **{{LastWorkingDay}}**.
+
+We confirm that you have handed over all company property and that your full and final settlement has been completed.
+
+We thank you for your contribution and wish you success in your future endeavours.` }
+];
+function longDate(d) {
+  if (!d) return '';
+  const x = new Date(String(d).length === 10 ? d + 'T00:00:00' : d);
+  if (isNaN(x)) return String(d);
+  return x.getDate() + ' ' + ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][x.getMonth()] + ' ' + x.getFullYear();
+}
+function tenure(from, to) {
+  if (!from) return '';
+  const a = new Date(from), b = to ? new Date(to) : new Date();
+  let m = (b.getFullYear() - a.getFullYear()) * 12 + b.getMonth() - a.getMonth(); if (b.getDate() < a.getDate()) m--;
+  if (m < 0) m = 0;
+  const y = Math.floor(m / 12); m %= 12;
+  return [y ? y + (y > 1 ? ' years' : ' year') : '', m ? m + (m > 1 ? ' months' : ' month') : ''].filter(Boolean).join(' ') || 'less than a month';
+}
+function inr(n) { return Number(n || 0).toLocaleString('en-IN'); }
+function salaryRow(ref, amounts, comps, effectiveFrom, by) {
+  let earn = 0, ded = 0, emp = 0;
+  comps.forEach(c => { const v = Number(amounts[c.Name] || 0); if (c.Type === 'Deduction') ded += v; else if (c.Type === 'Employer') emp += v; else earn += v; });
+  return { Ref: ref, Components: JSON.stringify(amounts), MonthlyEarnings: earn, MonthlyDeductions: ded, MonthlyEmployer: emp, MonthlyNet: earn - ded,
+    AnnualCTC: (earn + emp) * 12, EffectiveFrom: effectiveFrom ? normDate(effectiveFrom) : new Date().toISOString().slice(0, 10), UpdatedBy: by, UpdatedAt: new Date().toISOString() };
+}
+
 const HR_ROLES = ['SuperAdmin', 'Admin', 'HR'];
 const CAND_FIELDS = ['Name', 'Phone', 'DOB', 'PositionCode', 'Source', 'Referrer', 'ExpectedSalary', 'ResumeKey', 'WhyJoin', 'WhyHire', 'WeekendOK', 'Value90Days',
   'OwnVehicle', 'Remarks', 'Email', 'CurrentSalary', 'ReferrerEmpId', 'SourceDetail', 'PhotoKey', 'AadharKey', 'CityState', 'Address', 'Occupation',

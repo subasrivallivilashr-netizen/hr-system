@@ -120,3 +120,21 @@ dialog.wide{width:min(900px,96vw)}
 .dd a:hover{background:#f1f4f9!important}.dd a.on{background:#e6edf8!important;font-weight:600}
 @media (max-width:700px){.nav{flex-wrap:wrap}.dd{position:fixed;left:12px;right:12px;top:auto;min-width:0}}
 @media print{.top{display:none!important}}
+
+/* files & photos */
+.av{border-radius:50%;object-fit:cover;vertical-align:middle;display:inline-block;flex:none}
+.av-i{background:#e3e8ef;color:#4a5568;font-weight:700;display:inline-flex;align-items:center;justify-content:center}
+.who{display:flex;align-items:center;gap:8px}
+.files{display:flex;flex-direction:column;gap:6px;margin:6px 0}
+.file{display:flex;align-items:center;gap:10px;border:1px solid #e5e7eb;border-radius:8px;padding:6px 8px}
+.file .fmeta{flex:1;min-width:0;font-size:13px;overflow-wrap:anywhere}
+.ficon{font-size:10px;font-weight:700;background:#eef2f7;color:#475569;border-radius:4px;padding:4px 5px}
+.fup{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px}
+.fup select{width:auto;flex:1 1 140px}.fup input[type=file]{flex:2 1 180px;font-size:13px}
+button.sm{padding:4px 10px;font-size:12px}
+button.danger{color:#b42318;border-color:#f3c3be}
+.upl{border:1px dashed #cbd5e1;border-radius:8px;padding:10px;margin:6px 0}
+.upl .pv{display:flex;align-items:center;gap:10px;margin-top:6px}
+.upl .pv img{width:56px;height:56px;border-radius:50%;object-fit:cover}
+.att{display:flex;gap:4px;justify-content:flex-end}
+.fm:empty{display:none}

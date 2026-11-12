@@ -63,6 +63,7 @@
   <div class="dlg-body">
     <div class="kv" id="cKv"></div>
     <div class="box"><h4>Next step</h4><div id="cAct"></div><div id="cForm"></div><span class="msg" id="m-c"></span></div>
+    <div class="box"><h4>Documents</h4><div id="cDocs"></div></div>
     <div class="box"><h4>Edit details</h4><div class="grid" id="cEdit"></div><div class="row-end" style="margin-top:8px"><button id="cSaveEdit">Save details</button></div></div>
     <div class="box"><h4>History</h4><ul class="tl" id="cTl"><li>Loading…</li></ul></div>
   </div>
@@ -114,6 +115,7 @@
 
 <script src="assets/app.js"></script>
 <script src="assets/salary.js"></script>
+<script src="assets/files.js"></script>
 <script>
 const S = guard(['SuperAdmin', 'Admin', 'HR']);
 renderTop('hiring');
@@ -151,7 +153,7 @@ document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => {
   ['pipeline', 'interviews', 'offers', 'questions'].forEach(t => $('#t-' + t).classList.toggle('hidden', t !== b.dataset.t));
 });
 async function load() {
-  D = await api('getHiring');
+  [D] = await Promise.all([api('getHiring'), loadPhotos()]);
   const keepP = $('#fPos').value, keepS = $('#fSrc').value;
   $('#fPos').innerHTML = '<option value="">All</option>' + D.positions.filter(p => p.ParentPositionCode).map(p => `<option value="${esc(p.PositionCode)}">${esc(p.PositionName)}</option>`).join('');
   $('#fSrc').innerHTML = '<option value="">All</option>' + [...new Set(D.candidates.map(c => c.Source).filter(Boolean))].sort().map(s => `<option>${esc(s)}</option>`).join('');
@@ -174,7 +176,7 @@ function drawPipeline() {
   const list = D.candidates.filter(c => (chip === 'All' || (chip === 'Open' ? !CLOSED.includes(c.Status) : c.Status === chip)) &&
     (!fp || c.PositionCode === fp) && (!fs || c.Source === fs) && (!q || [c.Name, c.Phone, c.AppNo].join(' ').toLowerCase().includes(q)))
     .sort((a, b) => (a.CreatedAt < b.CreatedAt ? 1 : -1));
-  $('#pRows').innerHTML = list.map(c => `<tr class="click" data-a="${esc(c.AppNo)}"><td><b>${esc(c.AppNo)}</b></td><td>${esc(c.Name)}${c.IsDuplicatePhone === 'Yes' ? ' <span class="dup" title="This phone number applied before">REPEAT</span>' : ''}</td><td>${esc(c.Phone)}</td><td>${esc(pName(c.PositionCode))}</td><td>${esc(c.Source)}</td><td>${fmtD(c.Date)} <span class="sub">(${daysAgo(c.Date)}d)</span></td><td>${pill(c.Status)}</td></tr>`).join('')
+  $('#pRows').innerHTML = list.map(c => `<tr class="click" data-a="${esc(c.AppNo)}"><td><b>${esc(c.AppNo)}</b></td><td><span class="who">${avatar(c.AppNo, c.Name, 26)}<span>${esc(c.Name)}</span></span>${c.IsDuplicatePhone === 'Yes' ? ' <span class="dup" title="This phone number applied before">REPEAT</span>' : ''}</td><td>${esc(c.Phone)}</td><td>${esc(pName(c.PositionCode))}</td><td>${esc(c.Source)}</td><td>${fmtD(c.Date)} <span class="sub">(${daysAgo(c.Date)}d)</span></td><td>${pill(c.Status)}</td></tr>`).join('')
     || '<tr><td colspan="7" style="color:var(--muted)">No candidates here.</td></tr>';
   document.querySelectorAll('#pRows tr.click').forEach(r => r.onclick = () => openCand(r.dataset.a));
 }
@@ -182,7 +184,8 @@ $('#q').addEventListener('input', drawPipeline); ['fPos', 'fSrc'].forEach(i => $
 
 function openCand(a) {
   curApp = a; const c = cand(a), s = sched(a);
-  $('#cT').textContent = `${c.Name} — ${pName(c.PositionCode)}`;
+  $('#cT').innerHTML = `<span class="who">${avatar(c.AppNo, c.Name, 40)}<span>${esc(c.Name)} — ${esc(pName(c.PositionCode))}</span></span>`;
+  docBox($('#cDocs'), c.AppNo, { onChange: () => { $('#cT').querySelector('.av').outerHTML = avatar(c.AppNo, c.Name, 40); drawPipeline(); } });
   $('#cS').innerHTML = `${esc(c.AppNo)} · applied ${fmtD(c.Date)} (${daysAgo(c.Date)} days ago) · ${pill(c.Status)}${c.IsDuplicatePhone === 'Yes' ? ' · <span class="dup">applied before with this phone</span>' : ''}`;
   const F = [['Phone', c.Phone], ['Email', c.Email], ['Gender', c.Gender], ['Date of birth', fmtD(c.DOB)], ['City', c.CityState], ['Preferred store', c.StoreCode],
     ['Source', c.Source + (c.Referrer ? ' · ' + c.Referrer : '') + (c.ReferrerEmpId ? ' (' + c.ReferrerEmpId + ')' : '')], ['Qualification', c.Qualification], ['Experience', c.Experience],

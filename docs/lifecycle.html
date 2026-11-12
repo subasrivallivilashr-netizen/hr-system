@@ -46,6 +46,8 @@
 </div></dialog>
 
 <script src="assets/app.js"></script>
+<script src="assets/files.js"></script>
+<input type="file" id="kFile" class="hidden" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png">
 <script>
 const S = guard(['SuperAdmin', 'Admin', 'HR']);
 renderTop('lifecycle');
@@ -140,9 +142,25 @@ function openCk(recordId) {
   const sections = {};
   pr.items.forEach(i => { const t = box.template.find(x => x.ItemId === i.ItemId) || { Section: 'Other', Item: i.ItemId, Mandatory: 'Yes' }; (sections[t.Section] = sections[t.Section] || []).push([i, t]); });
   $('#kBody').innerHTML = Object.keys(sections).sort((a, b) => (parseInt(a) || 99) - (parseInt(b) || 99)).map(sec => `<div class="box"><h4>${esc(sec)}</h4>${sections[sec].map(([i, t]) => `
-    <div class="qrow" style="grid-template-columns:1fr 130px 1fr"><div>${esc(t.Item)}${t.Mandatory === 'No' ? ' <span class="sub" style="font-size:11px">(optional)</span>' : ''}</div>
+    <div class="qrow" style="grid-template-columns:1fr 130px 1fr 118px"><div>${esc(t.Item)}${t.Mandatory === 'No' ? ' <span class="sub" style="font-size:11px">(optional)</span>' : ''}</div>
     <select class="kst" data-i="${esc(i.ItemId)}" ${done ? 'disabled' : ''}><option value="">— Pending —</option><option ${i.Status === ok ? 'selected' : ''}>${ok}</option><option ${i.Status === 'NA' ? 'selected' : ''}>NA</option></select>
-    <input class="krm" data-i="${esc(i.ItemId)}" value="${esc(i.Remarks)}" placeholder="Remarks" ${done ? 'disabled' : ''}></div>`).join('')}</div>`).join('');
+    <input class="krm" data-i="${esc(i.ItemId)}" value="${esc(i.Remarks)}" placeholder="Remarks" ${done ? 'disabled' : ''}>
+    <div class="att">${i.FileId ? `<button type="button" class="sm" data-view="${esc(i.FileId)}" title="View proof">📎 View</button>` : ''}${done ? '' : `<button type="button" class="sm" data-att="${esc(i.ItemId)}" title="Attach proof (PDF/JPG/PNG)">${i.FileId ? '↻' : '📎 Attach'}</button>`}</div></div>`).join('')}</div>`).join('');
+  document.querySelectorAll('#kBody [data-view]').forEach(b => b.onclick = () => openFile(b.dataset.view));
+  document.querySelectorAll('#kBody [data-att]').forEach(b => b.onclick = () => {
+    const inp = $('#kFile'); inp.value = '';
+    inp.onchange = async () => {
+      const f = inp.files[0]; if (!f) return;
+      const t = (box.template.find(x => x.ItemId === b.dataset.att) || {}).Item || b.dataset.att;
+      b.disabled = true; b.textContent = 'Uploading…';
+      try {
+        if (!(await save(kind, recordId))) return;            // keep ticks typed so far
+        await api('uploadFile', { ref: rec.EmpId, docType: 'CHECKLIST', note: kind + ': ' + t, file: await readUpload(f, 'CHECKLIST'), link: { kind, recordId, itemId: b.dataset.att } });
+        await load(); openCk(recordId); showMsg($('#m-k'), 'Attached', true);
+      } catch (e) { showMsg($('#m-k'), e.message); b.disabled = false; b.textContent = '📎 Attach'; }
+    };
+    inp.click();
+  });
   document.querySelectorAll('.kst').forEach(s => s.onchange = () => { const n = [...document.querySelectorAll('.kst')].filter(x => x.value).length; $('#kPr').textContent = `${n}/${pr.total}`; });
   $('#kSave').classList.toggle('hidden', done); $('#kDone').classList.toggle('hidden', done);
   $('#kDone').textContent = kind === 'Exit' ? 'Complete exit (mark Exited)' : 'Mark onboarding complete';

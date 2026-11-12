@@ -16,11 +16,17 @@ export default {
   async fetch(request, env) {
     const cors = corsHeaders(request, env);
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
+    if (new URL(request.url).pathname.startsWith('/__')) return new Response('Not found', { status: 404 });
     const id = env.HUB.idFromName('main');
     const res = await env.HUB.get(id).fetch(request);
     const out = new Response(res.body, res);
     Object.entries(cors).forEach(([k, v]) => out.headers.set(k, v));
     return out;
+  },
+  // Daily job (see wrangler.toml [triggers]): deletes files of rejected candidates after the retention period
+  async scheduled(event, env, ctx) {
+    const id = env.HUB.idFromName('main');
+    ctx.waitUntil(env.HUB.get(id).fetch(new Request('https://internal/__cleanup', { method: 'POST' })));
   }
 };
 
@@ -48,6 +54,7 @@ export class Hub {
   async fetch(request) {
     try {
       const url = new URL(request.url);
+      if (url.pathname === '/__cleanup') return json({ ok: true, ...(await this.serialWrite(() => this.purgeRejected('daily job'))) });
       let body = {};
       if (request.method === 'POST') body = await request.json().catch(() => ({}));
       else url.searchParams.forEach((v, k) => body[k] = v);
@@ -63,6 +70,7 @@ export class Hub {
       }
       const run = () => handler.fn.call(this, body, user);
       const result = handler.write ? await this.serialWrite(run) : await run();
+      if (result && result.__raw) return result.__raw;
       return json({ ok: true, ...result });
     } catch (e) {
       return json({ ok: false, error: String(e.message || e) }, 500);
@@ -326,7 +334,15 @@ export class Hub {
     if (new Date(t.ExpiresAt) < new Date()) throw new Error('This link has expired (links are valid for 24 hours). Ask HR for a new one.');
     return t;
   }
-  async createCandidate(c, by) {
+  async createCandidate(c, by, files) {
+    files = (files || []).filter(f => f && f.data);
+    const company0 = await this.companyMap();
+    if (company0.UploadUrl) {
+      const need = (await this.docTypes()).filter(d => CANDIDATE_FORM_DOCS.includes(d.Code) && d.CandidateForm === 'Mandatory' && d.Active !== 'No');
+      const missing = need.filter(d => !files.find(f => String(f.docType).toUpperCase() === d.Code));
+      if (missing.length) throw new Error('Please attach: ' + missing.map(d => d.Name).join(', '));
+    } else files = [];
+    files.forEach(f => { f.docType = String(f.docType || '').toUpperCase(); if (!CANDIDATE_FORM_DOCS.includes(f.docType)) throw new Error('Unknown attachment'); checkFile(f); });
     const name = String(c.Name || '').trim(), phone = String(c.Phone || '').replace(/\D/g, '');
     if (!name) throw new Error('Name is required');
     if (!/^\d{10}$/.test(phone)) throw new Error('Phone must be 10 digits');
@@ -345,7 +361,9 @@ export class Hub {
       DOB: c.DOB ? normDate(c.DOB) : '', IsDuplicatePhone: dup ? 'Yes' : 'No', CreatedAt: now, UpdatedAt: now, Source: row.Source || 'Walk-in' });
     await this.append('Hiring', 'Candidates', [row]);
     await this.log('Hiring', appNo, 'Applied', `${pos.PositionName} · ${by}`, by);
-    return { appNo, duplicate: dup ? { AppNo: dup.AppNo, Name: dup.Name, Date: dup.Date } : null };
+    let fileNote = '';
+    if (files.length) { try { await this.storeFiles(appNo, 'Candidates/' + appNo, files, by, ''); } catch (e) { fileNote = 'Application saved, but the files could not be uploaded: ' + e.message; } }
+    return { appNo, fileNote, duplicate: dup ? { AppNo: dup.AppNo, Name: dup.Name, Date: dup.Date } : null };
   }
   async recordRejection(c, stage, remarks, by) {
     await this.append('Hiring', 'Rejected_Candidates', [{ AppNo: c.AppNo, Name: c.Name, Phone: c.Phone, PositionCode: c.PositionCode,
@@ -439,6 +457,64 @@ export class Hub {
     if (sal) Object.assign(f, { CTC: inr(sal.AnnualCTC), MonthlyGross: inr(sal.MonthlyEarnings), MonthlyNet: inr(sal.MonthlyNet), SalaryEffectiveFrom: longDate(sal.EffectiveFrom) });
     Object.keys(f).forEach(k => { if (f[k] === '' || f[k] === undefined || f[k] === null) delete f[k]; });
     return f;
+  }
+
+  async fileTabs() {
+    await this.ensureTab('Settings', 'Document_Types', ['Code', 'Name', 'AppliesTo', 'CandidateForm', 'Active', 'Order']);
+    await this.ensureTab('Organisation', 'Files', ['FileId', 'Ref', 'DocType', 'FileName', 'Mime', 'Size', 'Thumb', 'Note', 'UploadedBy', 'UploadedAt', 'Status', 'DeletedAt']);
+  }
+  async docTypes() {
+    await this.fileTabs();
+    let rows = (await this.read('Settings', 'Document_Types')).map(clean);
+    if (!rows.length) { rows = DEFAULT_DOCS.map((d, i) => ({ ...d, Order: i + 1 })); await this.rewriteTab('Settings', 'Document_Types', rows); }
+    return rows.sort((a, b) => Number(a.Order) - Number(b.Order));
+  }
+  // Calls the Apps Script upload helper in the client's Google account
+  async helper(op, payload) {
+    const c = await this.companyMap();
+    if (!c.UploadUrl) throw new Error('File storage is not set up yet (Settings → File storage).');
+    const res = await fetch(c.UploadUrl, { method: 'POST', redirect: 'follow', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify({ ...payload, op, secret: c.UploadSecret }) });
+    const txt = await res.text(); let j;
+    try { j = JSON.parse(txt); } catch (e) { throw new Error('Upload helper did not answer correctly. Check the Web app URL and that access is "Anyone".'); }
+    if (!j.ok) throw new Error('Upload helper: ' + j.error + (j.error === 'Not authorised' ? ' (the secret in the script does not match Settings → File storage)' : ''));
+    return j;
+  }
+  async storeFiles(ref, path, files, by, note) {
+    await this.fileTabs();
+    const now = new Date().toISOString(), rows = [];
+    for (const f of files) {
+      const r = await this.helper('upload', { path, name: f.name, mime: f.mime, data: f.data });
+      rows.push({ FileId: r.fileId, Ref: ref, DocType: f.docType, FileName: f.name, Mime: f.mime, Size: r.size || b64size(f.data),
+        Thumb: f.docType === 'PHOTO' && /^data:image\/(jpeg|png);base64,/.test(f.thumb || '') && f.thumb.length < 30000 ? f.thumb : '', Note: note || '',
+        UploadedBy: by, UploadedAt: now, Status: 'Active', DeletedAt: '' });
+    }
+    if (rows.length) await this.append('Organisation', 'Files', rows);
+    return rows;
+  }
+  // Move a candidate's files to the new employee's folder
+  async moveCandidateFiles(appNo, empId) {
+    await this.fileTabs();
+    const files = (await this.read('Organisation', 'Files')).filter(f => f.Ref === appNo && f.Status !== 'Deleted');
+    if (!files.length) return 0;
+    const c = await this.companyMap();
+    if (c.UploadUrl) { try { await this.helper('move', { path: 'Employees/' + empId, fileIds: files.map(f => f.FileId) }); } catch (e) { /* files stay in candidate folder; records still move */ } }
+    await this.upsertMany('Organisation', 'Files', ['FileId'], files.map(f => ({ ...clean(f), Ref: empId, Note: ((f.Note ? f.Note + ' · ' : '') + 'from ' + appNo) })));
+    return files.length;
+  }
+  // Deletes files of rejected candidates after the retention period
+  async purgeRejected(by) {
+    await this.fileTabs();
+    const c = await this.companyMap(), days = Number(c.FileRetentionDays || 90);
+    if (!c.UploadUrl) return { message: 'File storage not set up', deleted: 0 };
+    const cutoff = new Date(Date.now() - days * 864e5).toISOString();
+    const old = new Set((await this.read('Hiring', 'Candidates')).filter(x => ['Rejected', 'Offer Rejected'].includes(x.Status) && (x.UpdatedAt || x.CreatedAt || '') < cutoff).map(x => x.AppNo));
+    const files = (await this.read('Organisation', 'Files')).filter(f => old.has(f.Ref) && f.Status !== 'Deleted').slice(0, 40);
+    if (!files.length) return { message: 'Nothing to clean up', deleted: 0 };
+    await this.helper('trash', { fileIds: files.map(f => f.FileId) });
+    const now = new Date().toISOString();
+    await this.upsertMany('Organisation', 'Files', ['FileId'], files.map(f => ({ ...clean(f), Status: 'Deleted', DeletedAt: now, Thumb: '' })));
+    await this.log('Files', 'CLEANUP', 'Rejected candidates\' files deleted', `${files.length} files older than ${days} days`, by);
+    return { message: `${files.length} files of rejected candidates deleted`, deleted: files.length };
   }
 
   async log(module, recordId, action, remarks, doneBy) {
@@ -1053,7 +1129,10 @@ const ACTIONS = {
         .map(p => ({ PositionCode: p.PositionCode, PositionName: p.PositionName, StoreCode: p.StoreCode }));
       const stores = (await this.read('Settings', 'Stores')).filter(s => s.Active !== 'No')
         .map(s => ({ StoreCode: s.StoreCode, StoreName: s.StoreName, Type: s.Type }));
-      return { companyName: company.CompanyName || '', positions, stores };
+      let uploads = [];
+      if (company.UploadUrl) uploads = (await this.docTypes()).filter(d => CANDIDATE_FORM_DOCS.includes(d.Code) && d.CandidateForm !== 'Hidden' && d.Active !== 'No')
+        .map(d => ({ Code: d.Code, Name: d.Name, Required: d.CandidateForm === 'Mandatory' }));
+      return { companyName: company.CompanyName || '', positions, stores, uploads };
     }
   },
 
@@ -1062,13 +1141,13 @@ const ACTIONS = {
     write: true,
     fn: async function (p) {
       if (p.website) return { appNo: '' };            // spam trap field, real people leave it empty
-      return this.createCandidate(p.candidate || {}, 'Self (QR form)');
+      return this.createCandidate(p.candidate || {}, 'Self (QR form)', p.files);
     }
   },
 
   addCandidate: {
     auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR], write: true,
-    fn: async function (p, user) { return this.createCandidate(p.candidate || {}, user.u); }
+    fn: async function (p, user) { return this.createCandidate(p.candidate || {}, user.u, p.files); }
   },
 
   getHiring: {
@@ -1344,6 +1423,7 @@ const ACTIONS = {
       await this.letterTabs();
       const candSal = (await this.read('Organisation', 'Salary')).find(x => x.Ref === c.AppNo);
       if (candSal) await this.upsertMany('Organisation', 'Salary', ['Ref'], [{ ...clean(candSal), Ref: e.EmpId, EffectiveFrom: e.JoiningDate, UpdatedAt: now }]);
+      try { await this.moveCandidateFiles(c.AppNo, e.EmpId); } catch (err) { /* never block joining */ }
       const ob = await this.startChecklist('Onboarding', e, null);
       await this.log('Hiring', c.AppNo, 'Joined', `Employee ${e.EmpId}`, user.u);
       await this.log('Organisation', e.EmpId, 'Employee added (joined)', `${e.FullName} from ${c.AppNo}`, user.u);
@@ -1668,6 +1748,143 @@ const ACTIONS = {
     }
   },
 
+  // ═════════════ FILES (uploads) ═════════════
+  getFileSetup: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR],
+    fn: async function (p, user) {
+      const c = await this.companyMap();
+      const out = { docTypes: await this.docTypes(), configured: !!c.UploadUrl, retentionDays: Number(c.FileRetentionDays || 90) };
+      if ([ROLES.SUPER, ROLES.ADMIN].includes(user.r)) {
+        let secret = c.UploadSecret;
+        if (!secret) { secret = randomHex(16); await this.setCompany({ UploadSecret: secret }); }
+        Object.assign(out, { uploadUrl: c.UploadUrl || '', uploadSecret: secret, folderId: '' });
+      }
+      return out;
+    }
+  },
+
+  saveStorageSettings: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN], write: true,
+    fn: async function (p, user) {
+      const url = String(p.uploadUrl || '').trim();
+      if (url && !/^https:\/\/script\.google\.com\/macros\/s\/[\w-]+\/exec$/.test(url)) throw new Error('Paste the Web app URL ending in /exec (from Deploy > Manage deployments)');
+      const days = Number(p.retentionDays || 90);
+      if (isNaN(days) || days < 7 || days > 3650) throw new Error('Keep files of rejected candidates for 7 to 3650 days');
+      const vals = { UploadUrl: url, FileRetentionDays: days };
+      if (p.newSecret) vals.UploadSecret = randomHex(16);
+      await this.setCompany(vals);
+      await this.log('Settings', 'STORAGE', 'File storage settings saved', p.newSecret ? 'new secret created' : '', user.u);
+      return { message: p.newSecret ? 'New secret created — paste it into the upload script and deploy again.' : 'Saved' };
+    }
+  },
+
+  testStorage: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN],
+    fn: async function () {
+      const r = await this.helper('ping', {});
+      return { message: `Connected · files go to "${r.folder}" in Google Drive` };
+    }
+  },
+
+  saveDocTypes: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR], write: true,
+    fn: async function (p, user) {
+      await this.fileTabs();
+      const rows = [], seen = new Set();
+      (p.docTypes || []).forEach((d, i) => {
+        const name = String(d.Name || '').trim(); if (!name) return;
+        let code = String(d.Code || '').trim().toUpperCase() || name.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 20);
+        if (seen.has(code)) throw new Error('Duplicate document: ' + name); seen.add(code);
+        const sys = SYSTEM_DOCS.find(s => s.Code === code);
+        rows.push({ Code: code, Name: name, AppliesTo: sys ? sys.AppliesTo : (['Candidate', 'Employee', 'Both'].includes(d.AppliesTo) ? d.AppliesTo : 'Employee'),
+          CandidateForm: CANDIDATE_FORM_DOCS.includes(code) ? (['Mandatory', 'Optional', 'Hidden'].includes(d.CandidateForm) ? d.CandidateForm : 'Optional') : '',
+          Active: d.Active === 'No' && !sys ? 'No' : 'Yes', Order: i + 1 });
+      });
+      SYSTEM_DOCS.forEach(s => { if (!seen.has(s.Code)) rows.push({ ...s, Order: rows.length + 1 }); });
+      await this.rewriteTab('Settings', 'Document_Types', rows);
+      await this.log('Settings', 'DOCTYPES', 'Document types saved', rows.length + ' types', user.u);
+      return { message: 'Saved' };
+    }
+  },
+
+  uploadFile: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR], write: true,
+    fn: async function (p, user) {
+      const ref = String(p.ref || '');
+      const isCand = ref.startsWith('APP-');
+      const person = isCand ? await this.candidate(ref) : (await this.read('Organisation', 'Employees')).find(e => e.EmpId === ref);
+      if (!person) throw new Error('Person not found: ' + ref);
+      const types = await this.docTypes();
+      const f = { ...(p.file || {}), docType: String(p.docType || '').toUpperCase() };
+      if (!types.find(t => t.Code === f.docType && t.Active !== 'No')) throw new Error('Unknown document type');
+      checkFile(f);
+      const rows = await this.storeFiles(ref, (isCand ? 'Candidates/' : 'Employees/') + ref, [f], user.u, p.note || '');
+      if (p.link && p.link.recordId && p.link.itemId) {
+        const kind = p.link.kind === 'Exit' ? 'Exit' : 'Onboarding';
+        await this.ensureColumns('HR_Ops', kind + '_Items', ['FileId']);
+        const it = (await this.read('HR_Ops', kind + '_Items')).find(i => i.RecordId === p.link.recordId && i.ItemId === p.link.itemId);
+        if (it) await this.upsertMany('HR_Ops', kind + '_Items', ['RecordId', 'ItemId'], [{ ...clean(it), FileId: rows[0].FileId }]);
+      }
+      await this.log(isCand ? 'Hiring' : 'Organisation', ref, 'File uploaded', `${f.docType}: ${f.name}`, user.u);
+      return { message: 'Uploaded', file: { ...rows[0], Thumb: undefined } };
+    }
+  },
+
+  listFiles: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR],
+    fn: async function (p) {
+      await this.fileTabs();
+      const refs = [p.ref, p.alsoRef].filter(Boolean);
+      const files = (await this.read('Organisation', 'Files')).filter(f => refs.includes(f.Ref) && f.Status !== 'Deleted').map(f => ({ ...clean(f), Thumb: undefined }));
+      return { files: files.sort((a, b) => a.UploadedAt < b.UploadedAt ? 1 : -1), docTypes: await this.docTypes() };
+    }
+  },
+
+  // Streams the file itself (not JSON) to Admin / HR
+  getFile: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR],
+    fn: async function (p, user) {
+      await this.fileTabs();
+      const f = (await this.read('Organisation', 'Files')).find(x => x.FileId === p.fileId && x.Status !== 'Deleted');
+      if (!f) throw new Error('File not found');
+      const token = await this.googleToken();
+      const res = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(f.FileId)}?alt=media`, { headers: { Authorization: 'Bearer ' + token } });
+      if (!res.ok) throw new Error('Could not read the file from Google Drive (' + res.status + ')');
+      this.log('Files', f.Ref, 'File viewed', `${f.DocType}: ${f.FileName}`, user.u);
+      return { __raw: new Response(res.body, { headers: { 'Content-Type': f.Mime || 'application/octet-stream', 'Content-Disposition': `inline; filename="${String(f.FileName).replace(/"/g, '')}"`, 'Cache-Control': 'no-store' } }) };
+    }
+  },
+
+  deleteFile: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR], write: true,
+    fn: async function (p, user) {
+      await this.fileTabs();
+      const f = (await this.read('Organisation', 'Files')).find(x => x.FileId === p.fileId && x.Status !== 'Deleted');
+      if (!f) throw new Error('File not found');
+      await this.helper('trash', { fileIds: [f.FileId] });
+      await this.upsertMany('Organisation', 'Files', ['FileId'], [{ ...clean(f), Status: 'Deleted', DeletedAt: new Date().toISOString() }]);
+      await this.log('Files', f.Ref, 'File deleted', `${f.DocType}: ${f.FileName}`, user.u);
+      return { message: 'Deleted' };
+    }
+  },
+
+  // Small photo thumbnails for lists (all roles). Only photos — never documents.
+  getPhotos: {
+    auth: true,
+    fn: async function () {
+      await this.fileTabs();
+      const out = {};
+      (await this.read('Organisation', 'Files')).filter(f => f.DocType === 'PHOTO' && f.Status !== 'Deleted' && f.Thumb)
+        .sort((a, b) => a.UploadedAt < b.UploadedAt ? -1 : 1).forEach(f => out[f.Ref] = f.Thumb);
+      return { photos: out };
+    }
+  },
+
+  runFileCleanup: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN], write: true,
+    fn: async function (p, user) { return this.purgeRejected(user.u); }
+  },
+
   changeMyPassword: {
     auth: true, write: true,
     fn: async function (p, user) {
@@ -1684,6 +1901,34 @@ const ACTIONS = {
 
 
 // ───────────────────────── Helpers ─────────────────────────
+const CANDIDATE_FORM_DOCS = ['PHOTO', 'RESUME', 'AADHAR'];
+const SYSTEM_DOCS = [
+  { Code: 'PHOTO', Name: 'Photo', AppliesTo: 'Both', CandidateForm: 'Optional', Active: 'Yes' },
+  { Code: 'RESUME', Name: 'Resume', AppliesTo: 'Both', CandidateForm: 'Optional', Active: 'Yes' },
+  { Code: 'AADHAR', Name: 'Aadhar (masked)', AppliesTo: 'Both', CandidateForm: 'Optional', Active: 'Yes' },
+  { Code: 'CHECKLIST', Name: 'Checklist proof', AppliesTo: 'Employee', CandidateForm: '', Active: 'Yes' }
+];
+const DEFAULT_DOCS = SYSTEM_DOCS.concat([
+  { Code: 'PAN', Name: 'PAN card', AppliesTo: 'Employee', CandidateForm: '', Active: 'Yes' },
+  { Code: 'CERTIFICATES', Name: 'Educational certificates', AppliesTo: 'Both', CandidateForm: '', Active: 'Yes' },
+  { Code: 'BANK', Name: 'Bank proof (passbook / cheque)', AppliesTo: 'Employee', CandidateForm: '', Active: 'Yes' },
+  { Code: 'OFFER_SIGNED', Name: 'Signed offer letter', AppliesTo: 'Both', CandidateForm: '', Active: 'Yes' },
+  { Code: 'APPOINTMENT_SIGNED', Name: 'Signed appointment letter', AppliesTo: 'Employee', CandidateForm: '', Active: 'Yes' },
+  { Code: 'OTHER', Name: 'Other', AppliesTo: 'Both', CandidateForm: '', Active: 'Yes' }
+]);
+const FILE_TYPES = { 'application/pdf': [0x25, 0x50, 0x44, 0x46], 'image/jpeg': [0xFF, 0xD8, 0xFF], 'image/png': [0x89, 0x50, 0x4E, 0x47] };
+function b64size(b64) { const s = String(b64 || ''); return Math.floor(s.length * 3 / 4) - (s.endsWith('==') ? 2 : s.endsWith('=') ? 1 : 0); }
+// Type, size and real content check (first bytes must match the type)
+function checkFile(f) {
+  if (!f || !f.data || !f.name) throw new Error('No file received');
+  if (!FILE_TYPES[f.mime]) throw new Error(`${f.name}: only PDF, JPG and PNG files are allowed`);
+  if (b64size(f.data) > 5 * 1024 * 1024) throw new Error(`${f.name}: larger than 5 MB`);
+  let head;
+  try { head = atob(String(f.data).slice(0, 12)); } catch (e) { throw new Error(`${f.name}: file could not be read`); }
+  if (!FILE_TYPES[f.mime].every((b, i) => head.charCodeAt(i) === b)) throw new Error(`${f.name}: the file content is not a real ${f.mime.split('/')[1].toUpperCase()}`);
+  f.name = String(f.name).replace(/[\\\/:*?"<>|#%]+/g, '_').slice(0, 120);
+}
+
 const BRAND_KEYS = ['BrandLogo', 'BrandSignature', 'BrandColor', 'BrandFont', 'BrandHeader', 'BrandFooter', 'BrandSignatoryName', 'BrandSignatoryDesignation',
   'BrandLetterPrefix', 'BrandMargin', 'BrandWatermark', 'BrandLogoAlign'];
 const LETTER_FIELDS = {

@@ -18,3 +18,7 @@ class_name = "Hub"
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["Hub"]
+
+# Daily job at 02:00 India time (20:30 UTC): deletes files of rejected candidates after the retention period
+[triggers]
+crons = ["30 20 * * *"]

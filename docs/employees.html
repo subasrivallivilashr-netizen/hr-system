@@ -45,6 +45,7 @@
   <div class="row-end"><span class="msg" id="m-emp"></span><button value="cancel" formnovalidate>Cancel</button><button class="btn" id="sEmp">Save</button></div>
   <div id="extras" class="hidden">
     <div class="box"><h4>Letters</h4><div class="actions"><select id="lType" style="width:auto"></select><button type="button" id="lGo">Generate</button></div></div>
+    <details class="box" id="docDet"><summary style="cursor:pointer;font-weight:600;color:var(--brand)">Documents (Admin / HR only)</summary><div id="eDocs" style="margin-top:8px"></div></details>
     <details class="box"><summary style="cursor:pointer;font-weight:600;color:var(--brand)">Salary (Admin / HR only)</summary><div id="eSal" style="margin-top:8px"></div></details>
   </div>
 </form></dialog>
@@ -58,6 +59,7 @@
 
 <script src="assets/app.js"></script>
 <script src="assets/salary.js"></script>
+<script src="assets/files.js"></script>
 <script>
 const S = guard(['SuperAdmin', 'Admin', 'HR', 'Manager']);
 renderTop('employees');
@@ -69,7 +71,7 @@ const empName = id => (D.employees.find(e => e.EmpId === id) || {}).FullName || 
 const fmtD = d => d ? d.split('-').reverse().join('-') : '';
 
 async function load() {
-  D = await api('getEmployees');
+  [D] = await Promise.all([api('getEmployees'), loadPhotos()]);
   $('#fStore').innerHTML = '<option value="">All</option>' + D.stores.map(s => `<option value="${esc(s.StoreCode)}">${esc(s.StoreCode)} · ${esc(s.StoreName)}</option>`).join('');
   $('#fPos').innerHTML = '<option value="">All</option>' + D.positions.map(p => `<option value="${esc(p.PositionCode)}">${esc(p.PositionName)}</option>`).join('');
   draw();
@@ -83,7 +85,7 @@ function draw() {
   const active = D.employees.filter(e => e.Status !== 'Exited').length;
   $('#count').textContent = `${active} active employees · showing ${list.length}`;
   const cls = s => s === 'Confirmed' ? 'yes' : s === 'Exited' ? 'no' : '';
-  $('#rows').innerHTML = list.map(e => `<tr class="click" data-id="${esc(e.EmpId)}"><td><b>${esc(e.EmpId)}</b></td><td>${esc(e.FullName)}</td><td>${esc(posName(e.PositionCode))}</td><td>${esc(e.StoreCode)}</td><td>${esc(empName(e.ReportingManagerId))}</td><td>${fmtD(e.JoiningDate)}</td><td><span class="pill ${cls(e.Status)}">${esc(e.Status)}</span></td></tr>`).join('')
+  $('#rows').innerHTML = list.map(e => `<tr class="click" data-id="${esc(e.EmpId)}"><td><b>${esc(e.EmpId)}</b></td><td><span class="who">${avatar(e.EmpId, e.FullName, 28)}<span>${esc(e.FullName)}</span></span></td><td>${esc(posName(e.PositionCode))}</td><td>${esc(e.StoreCode)}</td><td>${esc(empName(e.ReportingManagerId))}</td><td>${fmtD(e.JoiningDate)}</td><td><span class="pill ${cls(e.Status)}">${esc(e.Status)}</span></td></tr>`).join('')
     || '<tr><td colspan="7" style="color:var(--muted)">No employees found.</td></tr>';
   if (canEdit) document.querySelectorAll('tr.click').forEach(r => r.onclick = () => openEmp(D.employees.find(e => e.EmpId === r.dataset.id)));
 }
@@ -120,7 +122,9 @@ function openEmp(e) {
     const L = [['appointment', 'Appointment letter'], ['confirmation', 'Confirmation letter'], ['probation_extension', 'Probation extension'], ['transfer', 'Promotion / transfer letter'], ['warning', 'Warning letter'], ['experience', 'Experience certificate'], ['relieving', 'Relieving letter']];
     $('#lType').innerHTML = L.map(([k, l]) => `<option value="${k}">${l}</option>`).join('') + (window.CUSTOM_LETTERS || []).map(t => `<option value="${esc(t.Type)}">${esc(t.Title)}</option>`).join('');
     $('#lGo').onclick = () => window.open(`letter.html?type=${encodeURIComponent($('#lType').value)}&ref=${encodeURIComponent(e.EmpId)}`, '_blank');
-    const det = document.querySelector('#extras details'); det.open = false;
+    const dd = $('#docDet'); dd.open = false; $('#eDocs').innerHTML = '';
+    dd.ontoggle = () => { if (dd.open) docBox($('#eDocs'), e.EmpId, { onChange: draw }); };
+    const det = document.querySelector('#extras details:not(#docDet)'); det.open = false;
     det.ontoggle = () => { if (det.open) salaryEditor($('#eSal'), e.EmpId); };
   }
   $('#dEmp').showModal();

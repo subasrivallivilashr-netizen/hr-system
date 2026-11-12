@@ -42,6 +42,7 @@
 </main>
 <script src="assets/app.js"></script>
 <script src="assets/letter.js"></script>
+<script src="assets/files.js"></script>
 <script>
 const S = guard(['SuperAdmin', 'Admin', 'HR', 'Manager']);
 renderTop('reports');
@@ -96,7 +97,7 @@ async function ensureData(entriesMonth) {
   if (D && loadedKey === key) return;
   $('#pages').innerHTML = '<p class="sub">Loading data…</p>';
   const em = entriesMonth || ymAdd(ymNow(), -1);
-  D = await api('getReportData', { kpiFrom: ymAdd(em, -11), kpiTo: ymAdd(ymNow(), 1), entriesMonth: em });
+  [D] = await Promise.all([api('getReportData', { kpiFrom: ymAdd(em, -11), kpiTo: ymAdd(ymNow(), 1), entriesMonth: em }), loadPhotos()]);
   D.positions = D.positions.filter(p => true); loadedKey = key;
   document.documentElement.style.setProperty('--rc', D.brand.BrandColor || '#1f3864');
   $('#lstyle').textContent = letterStyles(D.brand);
@@ -278,8 +279,8 @@ const build = {
       const trend = []; for (let i = 5; i >= 0; i--) { const mm = ymAdd(m, -i), k = kpiOf(e.EmpId, mm); trend.push([ymLabel(mm), k && k.TotalScore !== '' ? k.TotalScore : '—', k ? k.Band : '—']); }
       const band = D.bands.find(b => b.Band === s.Band) || {};
       return page('KPI scorecard', ymLabel(m) + (s.Status === 'Submitted' ? ' · not yet approved' : ''),
-        `<div class="kv2"><div><span>Name</span><b>${esc(e.FullName)}</b></div><div><span>Employee ID</span>${esc(e.EmpId)}</div><div><span>Position</span>${esc(pN(e.PositionCode))}</div><div><span>Store</span>${esc(stN(e.StoreCode))}</div>
-          <div><span>Reporting manager</span>${esc(E(e.ReportingManagerId).FullName || '')}</div><div><span>Joined</span>${longD(e.JoiningDate)}</div></div>` +
+        `<div style="display:flex;gap:14px;align-items:flex-start">${avatar(e.EmpId, e.FullName, 64)}<div class="kv2" style="flex:1"><div><span>Name</span><b>${esc(e.FullName)}</b></div><div><span>Employee ID</span>${esc(e.EmpId)}</div><div><span>Position</span>${esc(pN(e.PositionCode))}</div><div><span>Store</span>${esc(stN(e.StoreCode))}</div>
+          <div><span>Reporting manager</span>${esc(E(e.ReportingManagerId).FullName || '')}</div><div><span>Joined</span>${longD(e.JoiningDate)}</div></div></div>` +
         tiles([[s.TotalScore, 'Total score'], [s.Band + (band.Meaning ? ' · ' + band.Meaning : ''), 'Rating band'], [s.Status, 'Status']]) +
         `<h3>KPI detail</h3>` + T(['KPI', 'Target', 'Actual', 'Achievement', 'Weight', 'Score'], ents.map(x => { const pr = params.find(k => k.KpiName === x.KpiName) || {};
           return [{ html: `${esc(x.KpiName)}${pr.Direction === 'Lower is better' ? ' <span class="muted">(lower is better)</span>' : ''}` }, `${x.Target} ${pr.Unit || ''}`, x.Actual, x.AchievementPct + '%', x.WeightPct + '%', x.Score]; })
@@ -300,7 +301,8 @@ const build = {
     XROWS = [['Field', 'Value'], ['Employee ID', e.EmpId], ['Name', e.FullName], ['Position', pN(e.PositionCode)], ['Store', stN(e.StoreCode)], ['Manager', E(e.ReportingManagerId).FullName || ''], ['Joined', e.JoiningDate], ['Status', e.Status]];
     $('#rinfo').textContent = 'One-page summary of the employee from all modules.';
     return page('Employee profile', e.FullName,
-      `<h3>Personal</h3><div class="kv2"><div><span>Name</span><b>${esc(e.FullName)}</b></div><div><span>Employee ID</span>${esc(e.EmpId)}</div><div><span>Gender</span>${esc(e.Gender || '')}</div>
+      `<div style="display:flex;gap:16px;align-items:center;margin-bottom:6px">${avatar(e.EmpId, e.FullName, 84)}<div><div style="font-size:14pt;font-weight:700">${esc(e.FullName)}</div><div class="muted">${esc(pN(e.PositionCode))} · ${esc(stN(e.StoreCode))}</div></div></div>
+       <h3>Personal</h3><div class="kv2"><div><span>Name</span><b>${esc(e.FullName)}</b></div><div><span>Employee ID</span>${esc(e.EmpId)}</div><div><span>Gender</span>${esc(e.Gender || '')}</div>
         <div><span>Date of birth</span>${longD(e.DOB)}${age !== '' ? ` (${age} yrs)` : ''}</div><div><span>Phone</span>${esc(e.Phone || '')}</div><div><span>Email</span>${esc(e.Email || '')}</div></div>
        <h3>Job</h3><div class="kv2"><div><span>Position</span><b>${esc(pN(e.PositionCode))}</b></div><div><span>Department</span>${esc(P(e.PositionCode).Department || P(e.PositionCode).Branch || '')}</div>
         <div><span>Store</span>${esc(stN(e.StoreCode))}</div><div><span>Reporting manager</span>${esc(E(e.ReportingManagerId).FullName || '—')}</div><div><span>Direct reports</span>${reports}</div>
@@ -323,8 +325,8 @@ const build = {
     $('#rinfo').textContent = 'Active employees. Work anniversaries from 1 year onwards.';
     return page('Birthdays & work anniversaries', MON[mo - 1] + (st ? ' · ' + stN(st) : ''),
       tiles([[bday.length, 'Birthdays'], [anniv.length, 'Work anniversaries']]) +
-      `<h3>Birthdays</h3>` + T(['Date', 'Name', 'Position', 'Store'], bday.map(e => [Number(e.DOB.slice(8)) + ' ' + MON[mo - 1].slice(0, 3), e.FullName, pN(e.PositionCode), stN(e.StoreCode)])) +
-      `<h3>Work anniversaries</h3>` + T(['Date', 'Name', 'Position', 'Store', 'Years'], anniv.map(e => [Number(e.JoiningDate.slice(8)) + ' ' + MON[mo - 1].slice(0, 3), e.FullName, pN(e.PositionCode), stN(e.StoreCode), yr - Number(e.JoiningDate.slice(0, 4))]), { num: [4] }));
+      `<h3>Birthdays</h3>` + T(['Date', 'Name', 'Position', 'Store'], bday.map(e => [Number(e.DOB.slice(8)) + ' ' + MON[mo - 1].slice(0, 3), { html: `<span class="who">${avatar(e.EmpId, e.FullName, 24)}${esc(e.FullName)}</span>` }, pN(e.PositionCode), stN(e.StoreCode)])) +
+      `<h3>Work anniversaries</h3>` + T(['Date', 'Name', 'Position', 'Store', 'Years'], anniv.map(e => [Number(e.JoiningDate.slice(8)) + ' ' + MON[mo - 1].slice(0, 3), { html: `<span class="who">${avatar(e.EmpId, e.FullName, 24)}${esc(e.FullName)}</span>` }, pN(e.PositionCode), stN(e.StoreCode), yr - Number(e.JoiningDate.slice(0, 4))]), { num: [4] }));
   }
 };
 

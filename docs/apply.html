@@ -43,6 +43,7 @@
       <div><label>Can you work on weekends?</label><div class="choice"><label><input type="radio" name="WeekendOK" value="Yes"> Yes</label><label><input type="radio" name="WeekendOK" value="No"> No</label></div></div>
       <div><label>Do you have your own vehicle?</label><div class="choice"><label><input type="radio" name="OwnVehicle" value="Yes"> Yes</label><label><input type="radio" name="OwnVehicle" value="No"> No</label></div></div>
     </div>
+    <div id="upBox" class="hidden"><h2 style="margin-top:20px">Documents</h2><p class="sub">PDF, JPG or PNG · up to 5 MB each. You can take a photo with your phone.</p><div id="ups"></div></div>
     <label>Resume link (optional)</label><input name="ResumeKey" placeholder="Google Drive / LinkedIn link">
     <input class="trap" name="website" tabindex="-1" autocomplete="off" aria-hidden="true">
 
@@ -56,13 +57,31 @@
   </div>
 </div>
 <script src="assets/app.js"></script>
+<script src="assets/files.js"></script>
 <script>
 const byHR = new URLSearchParams(location.search).get('hr') === '1' && Session.get();
+let UPLOADS = [];
+const NOTE = { PHOTO: 'A clear passport-style photo of your face.', RESUME: 'Your CV / resume.', AADHAR: 'Please upload a <b>masked Aadhaar</b> (first 8 digits hidden). You can download one from myaadhaar.uidai.gov.in.' };
+function renderUploads() {
+  $('#upBox').classList.toggle('hidden', !UPLOADS.length);
+  $('#ups').innerHTML = UPLOADS.map(u => `<div class="upl"><label class="${u.Required ? 'req' : ''}">${esc(u.Name)}${u.Required ? '' : ' <span class="sub">(optional)</span>'}</label>
+    <p class="sub" style="margin:0 0 6px">${NOTE[u.Code] || ''}</p>
+    <input type="file" data-doc="${esc(u.Code)}" accept="${u.Code === 'PHOTO' ? 'image/jpeg,image/png' : '.pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png'}"${u.Code === 'PHOTO' ? ' capture="user"' : ''}>
+    <div class="pv sub"></div></div>`).join('');
+  document.querySelectorAll('#ups input[type=file]').forEach(inp => inp.onchange = async () => {
+    const pv = inp.parentElement.querySelector('.pv'), f = inp.files[0]; pv.innerHTML = '';
+    if (!f) return;
+    if (!FILE_OK.includes(f.type)) { pv.textContent = '⚠ Only PDF, JPG or PNG'; inp.value = ''; return; }
+    if (f.type.startsWith('image/')) { const u = URL.createObjectURL(f); pv.innerHTML = `<img src="${u}" alt=""> ${esc(f.name)}`; }
+    else pv.textContent = '📄 ' + f.name + ' · ' + fsize(f.size) + (f.size > FILE_MAX ? ' — too big (max 5 MB)' : '');
+  });
+}
 async function init() {
   try {
     const d = await api('getApplyForm');
     if (d.companyName) { $('#co').textContent = d.companyName + ' — Job Application'; document.title = d.companyName + ' — Apply'; }
     $('#pos').innerHTML = '<option value="">— Select —</option>' + d.positions.map(p => `<option value="${esc(p.PositionCode)}">${esc(p.PositionName)}</option>`).join('');
+    UPLOADS = d.uploads || []; renderUploads();
     $('#store').innerHTML = '<option value="">Any</option>' + d.stores.filter(s => s.Type !== 'Head Office').map(s => `<option value="${esc(s.StoreCode)}">${esc(s.StoreName)}</option>`).join('');
   } catch (e) { showMsg($('#m'), 'Form could not load: ' + e.message); }
 }
@@ -75,14 +94,21 @@ $('#f').addEventListener('submit', async e => {
   if (!/^\d{10}$/.test(o.Phone)) return showMsg($('#m'), 'Please enter a 10-digit mobile number');
   if (!o.PositionCode) return showMsg($('#m'), 'Please choose the position');
   const website = o.website; delete o.website;
-  const b = $('#b'); b.disabled = true; b.textContent = 'Submitting…';
+  const files = [];
+  for (const u of UPLOADS) {
+    const f = document.querySelector(`#ups input[data-doc="${u.Code}"]`).files[0];
+    if (!f) { if (u.Required) return showMsg($('#m'), 'Please attach: ' + u.Name); continue; }
+    try { files.push(await readUpload(f, u.Code)); } catch (err) { return showMsg($('#m'), err.message); }
+  }
+  const b = $('#b'); b.disabled = true; b.textContent = files.length ? 'Uploading…' : 'Submitting…';
   try {
-    const r = byHR ? await api('addCandidate', { candidate: o }) : await api('applyCandidate', { candidate: o, website });
+    const r = byHR ? await api('addCandidate', { candidate: o, files }) : await api('applyCandidate', { candidate: o, website, files });
+    if (r.fileNote) alert(r.fileNote);
     $('#appNo').textContent = r.appNo || 'Received';
     f.classList.add('hidden'); $('#done').classList.remove('hidden'); window.scrollTo(0, 0);
   } catch (err) { showMsg($('#m'), err.message); }
   b.disabled = false; b.textContent = 'Submit application';
 });
-$('#again').onclick = () => { $('#f').reset(); $('#f').classList.remove('hidden'); $('#done').classList.add('hidden'); $('#m').textContent = ''; };
+$('#again').onclick = () => { $('#f').reset(); renderUploads(); $('#f').classList.remove('hidden'); $('#done').classList.add('hidden'); $('#m').textContent = ''; };
 init();
 </script></body></html>

@@ -9,6 +9,7 @@
     <button data-t="ids">Employee ID</button>
     <button data-t="stores">Stores</button>
     <button data-t="users">Users</button>
+    <button data-t="files">Files</button>
     <button data-t="me">My password</button>
   </div>
 
@@ -43,6 +44,25 @@
   <section id="t-users" class="card hidden">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><div><h2>Users</h2><p class="sub">People who can log in.</p></div><button class="btn" id="addUser">+ Add user</button></div>
     <div class="tbl-wrap"><table><thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Stores</th><th>Employee</th><th>Active</th><th></th></tr></thead><tbody id="userRows"></tbody></table></div>
+  </section>
+
+  <section id="t-files" class="card hidden">
+    <h2>File storage</h2>
+    <p class="sub">Files are saved in your Google Drive by a small upload script (Upload.gs). Set it up once — see the setup guide.</p>
+    <div id="stState" class="sub"></div>
+    <div class="grid">
+      <div style="grid-column:1/-1"><label>Upload script — Web app URL</label><input id="stUrl" placeholder="https://script.google.com/macros/s/…/exec"></div>
+      <div style="grid-column:1/-1"><label>Secret <span class="sub">(paste into SECRET in Upload.gs)</span></label>
+        <div style="display:flex;gap:6px"><input id="stSecret" readonly style="font-family:monospace"><button type="button" id="stCopy">Copy</button></div></div>
+      <div><label>Delete files of rejected candidates after (days)</label><input id="stDays" type="number" min="7" max="3650"></div>
+    </div>
+    <div class="row-end" style="flex-wrap:wrap"><span class="msg" id="m-st"></span>
+      <button type="button" id="stNew">New secret</button><button type="button" id="stClean">Run clean-up now</button><button type="button" id="stTest">Test connection</button><button class="btn" id="stSave">Save</button></div>
+
+    <h2 style="margin-top:24px">Document types</h2>
+    <p class="sub">The first three appear on the job application form — choose Mandatory, Optional or Hidden. Add any other documents you keep for employees.</p>
+    <div class="tbl"><table><thead><tr><th>Document</th><th>For</th><th>Application form</th><th>Active</th><th></th></tr></thead><tbody id="dtBody"></tbody></table></div>
+    <div class="row-end"><span class="msg" id="m-dt"></span><button type="button" id="dtAdd">+ Add document type</button><button class="btn" id="dtSave">Save document types</button></div>
   </section>
 
   <section id="t-me" class="card hidden" style="max-width:420px">
@@ -167,5 +187,40 @@ $('#chg').onclick = async () => {
   catch (e) { showMsg($('#m-me'), e.message); }
 };
 
-if (S) load().catch(e => alert(e.message));
+// ---- Files
+let FS = null;
+const FORM_DOCS = ['PHOTO', 'RESUME', 'AADHAR'], LOCKED = ['PHOTO', 'RESUME', 'AADHAR', 'CHECKLIST'];
+async function loadFiles() {
+  FS = await api('getFileSetup');
+  $('#stUrl').value = FS.uploadUrl || ''; $('#stSecret').value = FS.uploadSecret || ''; $('#stDays').value = FS.retentionDays;
+  $('#stState').innerHTML = FS.configured ? '✅ Upload script is set.' : '⚠ Not set yet — uploads are switched off until you paste the Web app URL.';
+  drawDocTypes(FS.docTypes);
+}
+function drawDocTypes(list) {
+  const opt = (v, arr) => arr.map(a => `<option${a === v ? ' selected' : ''}>${a}</option>`).join('');
+  $('#dtBody').innerHTML = list.map(d => `<tr data-code="${esc(d.Code || '')}">
+    <td><input class="dn" value="${esc(d.Name)}"${d.Code === 'CHECKLIST' ? ' readonly' : ''}></td>
+    <td>${LOCKED.includes(d.Code) ? esc(d.AppliesTo) : `<select class="da">${opt(d.AppliesTo || 'Employee', ['Employee', 'Candidate', 'Both'])}</select>`}</td>
+    <td>${FORM_DOCS.includes(d.Code) ? `<select class="dc">${opt(d.CandidateForm || 'Optional', ['Mandatory', 'Optional', 'Hidden'])}</select>` : '—'}</td>
+    <td>${LOCKED.includes(d.Code) ? 'Yes' : `<select class="dx">${opt(d.Active || 'Yes', ['Yes', 'No'])}</select>`}</td>
+    <td>${LOCKED.includes(d.Code) ? '' : '<button type="button" class="sm danger dr">Remove</button>'}</td></tr>`).join('');
+  document.querySelectorAll('.dr').forEach(b => b.onclick = () => b.closest('tr').remove());
+}
+function readDocTypes() {
+  return [...document.querySelectorAll('#dtBody tr')].map(tr => ({ Code: tr.dataset.code, Name: $('.dn', tr).value.trim(),
+    AppliesTo: $('.da', tr) ? $('.da', tr).value : '', CandidateForm: $('.dc', tr) ? $('.dc', tr).value : '', Active: $('.dx', tr) ? $('.dx', tr).value : 'Yes' }));
+}
+$('#dtAdd').onclick = () => drawDocTypes([...readDocTypes(), { Code: '', Name: '', AppliesTo: 'Employee', Active: 'Yes' }]);
+$('#dtSave').onclick = async () => { try { await api('saveDocTypes', { docTypes: readDocTypes() }); showMsg($('#m-dt'), 'Saved', true); await loadFiles(); } catch (e) { showMsg($('#m-dt'), e.message); } };
+const stSave = async (newSecret) => {
+  try { const r = await api('saveStorageSettings', { uploadUrl: $('#stUrl').value.trim(), retentionDays: $('#stDays').value, newSecret }); await loadFiles(); showMsg($('#m-st'), r.message, true); }
+  catch (e) { showMsg($('#m-st'), e.message); }
+};
+$('#stSave').onclick = () => stSave(false);
+$('#stNew').onclick = () => { if (confirm('Create a new secret? Uploads stop until you paste it into Upload.gs and deploy a new version.')) stSave(true); };
+$('#stTest').onclick = async () => { showMsg($('#m-st'), 'Testing…', true); try { showMsg($('#m-st'), (await api('testStorage')).message, true); } catch (e) { showMsg($('#m-st'), e.message); } };
+$('#stClean').onclick = async () => { try { showMsg($('#m-st'), (await api('runFileCleanup')).message, true); } catch (e) { showMsg($('#m-st'), e.message); } };
+$('#stCopy').onclick = () => { navigator.clipboard.writeText($('#stSecret').value); showMsg($('#m-st'), 'Secret copied', true); };
+
+if (S) { load().catch(e => alert(e.message)); loadFiles().catch(e => showMsg($('#m-st'), e.message)); }
 </script></body></html>

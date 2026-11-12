@@ -2170,6 +2170,18 @@ const ACTIONS = {
     }
   },
 
+  // Interview pass mark (Hiring → Interview questions) — HR content, so Admin and HR may change it
+  savePassMark: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR], write: true,
+    fn: async function (p, user) {
+      const v = Number(p.passPct);
+      if (!(v >= 1 && v <= 100)) throw new Error('Pass mark must be between 1 and 100');
+      await this.setCompany({ InterviewPassPct: v });
+      await this.log('Hiring', 'PASS_MARK', 'Interview pass mark changed', v + '%', user.u);
+      return { message: 'Saved' };
+    }
+  },
+
   getModules: {
     auth: true, roles: [ROLES.SUPER],
     fn: async function () { return { modules: await this.modules(), all: Object.entries(MODULES).map(([k, m]) => ({ key: k, ...m })) }; }
@@ -2683,7 +2695,7 @@ const MODULES = {
 };
 const MODULE_ACTIONS = {
   ROLES: ['getRoles', 'saveRole', 'importRoles'],
-  HIRING: ['applyCandidate', 'addCandidate', 'getHiring', 'getCandidateTimeline', 'updateCandidate', 'logCall', 'saveQuestions', 'importQuestions', 'saveHrScore',
+  HIRING: ['savePassMark', 'applyCandidate', 'addCandidate', 'getHiring', 'getCandidateTimeline', 'updateCandidate', 'logCall', 'saveQuestions', 'importQuestions', 'saveHrScore',
     'createInterviewToken', 'getInterviewByToken', 'submitInterviewScore', 'decideCandidate', 'updateOffer', 'markJoined', 'getFormSetup', 'saveApplyForm'],
   EXIT: ['startExit'],
   KPI: ['getKpiSetup', 'saveKpiParam', 'removeKpiParam', 'importKpiParams', 'saveBands', 'getKpiMonth', 'saveKpiEntries', 'approveKpi', 'setKpiCycle', 'getKpiReport'],

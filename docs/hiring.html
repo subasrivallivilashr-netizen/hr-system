@@ -159,7 +159,7 @@ async function load() {
   $('#fPos').innerHTML = '<option value="">All</option>' + D.positions.filter(p => p.ParentPositionCode).map(p => `<option value="${esc(p.PositionCode)}">${esc(p.PositionName)}</option>`).join('');
   $('#fSrc').innerHTML = '<option value="">All</option>' + [...new Set(D.candidates.map(c => c.Source).filter(Boolean))].sort().map(s => `<option>${esc(s)}</option>`).join('');
   $('#fPos').value = keepP; $('#fSrc').value = keepS;
-  $('#passLbl').textContent = D.passPct + '%'; $('#passPct').value = D.passPct; $('#passPct').disabled = $('#savePass').disabled = !isAdmin;
+  $('#passLbl').textContent = D.passPct + '%'; $('#passPct').value = D.passPct; $('#passPct').disabled = $('#savePass').disabled = false;
   drawPipeline(); drawInterviews(); drawOffers(); drawQList();
   if (curApp && $('#dC').open) openCand(curApp);
   if (curApp && $('#dI').open) openInterview(curApp);
@@ -408,7 +408,7 @@ function drawQEditor() {
   $('#qAdd').onclick = () => add();
   $('#qSave').onclick = () => run(() => api('saveQuestions', { positionCode: code, round, questions: [...document.querySelectorAll('#qRows .duty')].map(d => ({ Question: d.querySelector('.qq').value, MaxScore: d.querySelector('.qm').value })) }), '#m-q');
 }
-$('#savePass').onclick = () => run(() => api('saveCompany', { values: { InterviewPassPct: $('#passPct').value } }), '#m-pass');
+$('#savePass').onclick = () => run(() => api('savePassMark', { passPct: $('#passPct').value }), '#m-pass');
 const QCOLS = [['PositionCode', 'Position Code'], ['Round', 'Round'], ['Question', 'Question'], ['MaxScore', 'Max Score']];
 $('#qTpl').onclick = () => {
   const wb = XLSX.utils.book_new();

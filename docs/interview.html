@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Interview Assessment</title><link rel="stylesheet" href="assets/app.css"></head>
+<body>
+<div class="pub-head"><h1 id="co">Interview Assessment</h1><p id="hello">Loading…</p></div>
+<div class="pub">
+  <div class="card hidden" id="err"><h2>Link not available</h2><p id="errMsg" class="sub"></p></div>
+  <div id="main" class="hidden">
+    <section class="card">
+      <h2 id="cName"></h2><p class="sub" id="cMeta"></p>
+      <div id="roleBox"></div>
+    </section>
+    <form class="card" id="f">
+      <h2>Score each question</h2><p class="sub">Give a score from 0 up to the maximum shown.</p>
+      <div id="qs"></div>
+      <div style="display:flex;justify-content:space-between;margin-top:12px;font-weight:600"><span>Total</span><span id="tot">—</span></div>
+      <label>Your remarks</label><textarea name="remarks" placeholder="Strengths, concerns, overall view"></textarea>
+      <label>If not suitable for this role, would another position suit them? (optional)</label>
+      <div class="grid"><div><select name="suggestedPosition" id="alt"></select></div><div><input name="suggestionReason" placeholder="Why that position"></div></div>
+      <button class="btn block" id="b">Submit assessment</button>
+      <div class="msg" id="m"></div>
+    </form>
+  </div>
+  <div class="card done-box hidden" id="done"><div class="big">Thank you</div><p class="sub">Your assessment has been sent to HR. You can close this page.</p></div>
+</div>
+<script src="assets/app.js"></script>
+<script>
+const token = new URLSearchParams(location.search).get('t') || '';
+let D = null;
+async function init() {
+  try { D = await api('getInterviewByToken', { token }); }
+  catch (e) { $('#hello').textContent = ''; $('#errMsg').textContent = e.message; $('#err').classList.remove('hidden'); return; }
+  if (D.companyName) $('#co').textContent = D.companyName + ' — Interview Assessment';
+  const exp = new Date(D.expiresAt);
+  $('#hello').textContent = `Hello ${D.assessorName} · link valid until ${exp.toLocaleString()}`;
+  const c = D.candidate;
+  $('#cName').textContent = `${c.Name} — ${D.position.PositionName}`;
+  $('#cMeta').textContent = [c.AppNo, c.Gender, c.Qualification, c.Experience, c.Occupation, c.CityState].filter(Boolean).join(' · ') + (D.hrRound ? ` · HR round: ${D.hrRound.total}/${D.hrRound.max}` : '');
+  $('#roleBox').innerHTML = D.position.JobPurpose || D.position.duties.length ? `<h3 style="font-size:14px;margin:10px 0 4px;color:var(--brand)">About the role</h3><p style="margin:0 0 6px">${esc(D.position.JobPurpose)}</p>${D.position.duties.length ? '<ul style="margin:0;padding-left:20px">' + D.position.duties.map(d => `<li>${esc(d)}</li>`).join('') + '</ul>' : ''}` : '';
+  $('#qs').innerHTML = D.questions.map(q => `<div class="qrow"><div>${esc(q.Question)}</div><div style="display:flex;gap:6px;align-items:center"><input class="score" type="number" min="0" max="${q.MaxScore}" step="0.5" data-q="${esc(q.QuestionId)}" data-max="${q.MaxScore}" required> <span class="sub">/ ${q.MaxScore}</span></div></div>`).join('');
+  $('#alt').innerHTML = '<option value="">— No suggestion —</option>' + D.otherPositions.map(p => `<option value="${esc(p.PositionCode)}">${esc(p.PositionName)}</option>`).join('');
+  document.querySelectorAll('.score').forEach(i => i.addEventListener('input', total));
+  $('#main').classList.remove('hidden');
+}
+function total() {
+  let t = 0, m = 0, all = true;
+  document.querySelectorAll('.score').forEach(i => { m += Number(i.dataset.max); if (i.value === '') all = false; else t += Number(i.value); });
+  $('#tot').textContent = all ? `${t} / ${m} (${Math.round(t / m * 100)}%)` : `${t} / ${m} so far`;
+}
+$('#f').addEventListener('submit', async e => {
+  e.preventDefault();
+  const scores = {}; let bad = '';
+  document.querySelectorAll('.score').forEach(i => { const v = i.value; if (v === '' || Number(v) < 0 || Number(v) > Number(i.dataset.max)) bad = 'Score every question within its maximum'; scores[i.dataset.q] = v; });
+  if (bad) return showMsg($('#m'), bad);
+  const fd = new FormData($('#f')), b = $('#b'); b.disabled = true; b.textContent = 'Submitting…';
+  try {
+    await api('submitInterviewScore', { token, scores, remarks: fd.get('remarks'), suggestedPosition: fd.get('suggestedPosition'), suggestionReason: fd.get('suggestionReason') });
+    $('#main').classList.add('hidden'); $('#done').classList.remove('hidden'); window.scrollTo(0, 0);
+  } catch (err) { showMsg($('#m'), err.message); b.disabled = false; b.textContent = 'Submit assessment'; }
+});
+init();
+</script></body></html>

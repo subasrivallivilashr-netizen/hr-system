@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Onboarding & Exit</title><link rel="stylesheet" href="assets/app.css"></head>
+<body>
+<header class="top" id="top"></header>
+<main>
+  <div class="tabs" id="tabs">
+    <button data-t="Onboarding" class="on">Onboarding <b id="nOb"></b></button>
+    <button data-t="Exit">Exit <b id="nEx"></b></button>
+    <button data-t="templates">Checklist templates</button>
+  </div>
+
+  <section id="t-list" class="card">
+    <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:start">
+      <div><h2 id="lTitle"></h2><p class="sub" id="lSub"></p></div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <label style="font-weight:400;margin:0"><input type="checkbox" id="showDone" style="width:auto"> Show completed</label>
+        <button class="btn" id="startBtn"></button>
+      </div>
+    </div>
+    <div class="tbl-wrap"><table><thead><tr id="lHead"></tr></thead><tbody id="lRows"></tbody></table></div>
+  </section>
+
+  <section id="t-templates" class="card hidden">
+    <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:end">
+      <div><h2>Checklist templates</h2><p class="sub">Used for new onboarding / exit records. Records already started keep their items.</p></div>
+      <div style="min-width:200px"><label>Template</label><select id="tKind"><option>Onboarding</option><option>Exit</option></select></div>
+    </div>
+    <div class="tbl-wrap"><table><thead><tr><th>Section</th><th>Item</th><th style="width:110px">Mandatory</th><th style="width:100px">Active</th><th style="width:40px"></th></tr></thead><tbody id="tRows"></tbody></table></div>
+    <div class="row-end"><button id="tAdd">+ Add item</button><span class="msg" id="m-t"></span><button class="btn" id="tSave">Save template</button></div>
+  </section>
+</main>
+
+<dialog id="dStart"><form method="dialog" id="fStart" style="padding:20px">
+  <h3 id="sT"></h3>
+  <label>Employee</label><select id="sEmp" required></select>
+  <div id="exitFields"><label>Last working day</label><input type="date" id="sLwd"><label>Reason for leaving</label><input id="sReason" placeholder="e.g. Higher studies, relocation, better offer"></div>
+  <p class="sub" id="sNote"></p>
+  <div class="row-end"><span class="msg" id="m-s"></span><button value="cancel" formnovalidate>Cancel</button><button class="btn" id="sGo">Start</button></div>
+</form></dialog>
+
+<dialog id="dCk" class="wide"><div style="padding:20px">
+  <div style="display:flex;justify-content:space-between;gap:8px;align-items:start"><div><h3 id="kT" style="margin:0"></h3><p class="sub" id="kS" style="margin:4px 0 0"></p></div><button id="kClose">Close</button></div>
+  <div class="dlg-body" id="kBody"></div>
+  <div class="row-end"><span class="msg" id="m-k"></span><button id="kSave">Save progress</button><button class="btn btn-ok" id="kDone"></button></div>
+</div></dialog>
+
+<script src="assets/app.js"></script>
+<script>
+const S = guard(['SuperAdmin', 'Admin', 'HR']);
+renderTop('lifecycle');
+let D = null, tab = 'Onboarding', cur = null;
+const fmtD = d => d ? String(d).slice(0, 10).split('-').reverse().join('-') : '';
+const pName = c => (D.positions.find(p => p.PositionCode === c) || {}).PositionName || c;
+const emp = id => D.employees.find(e => e.EmpId === id) || {};
+const K = () => tab === 'Exit' ? D.exit : D.onboarding;
+const DONE = () => tab === 'Exit' ? 'Done' : 'Yes';
+function progress(kind, rec) {
+  const box = kind === 'Exit' ? D.exit : D.onboarding;
+  const items = box.items.filter(i => i.RecordId === rec.RecordId);
+  const done = items.filter(i => i.Status).length;
+  return { items, done, total: items.length, pct: items.length ? Math.round(done / items.length * 100) : 0 };
+}
+// Onboarding timing: day 0-3 on track, 4-5 due soon, 6-7 overdue, 8+ critical
+function obTiming(rec, pr) {
+  if (rec.Status === 'Completed') return ['Completed', 'yes'];
+  const days = Math.floor((Date.now() - new Date(rec.JoiningDate || rec.CreatedAt)) / 864e5);
+  if (days < 0) return [`Joins in ${-days}d`, ''];
+  if (days <= 3) return [`Day ${days} · On track`, 'yes'];
+  if (days <= 5) return [`Day ${days} · Due soon`, ''];
+  if (days <= 7) return [`Day ${days} · Overdue`, 'no'];
+  return [`Day ${days} · Critical`, 'no'];
+}
+function exTiming(rec) {
+  if (rec.Status === 'Completed') return ['Completed', 'yes'];
+  const left = Math.ceil((new Date(rec.LastWorkingDay) - Date.now()) / 864e5);
+  return left > 0 ? [`${left} days to last day`, ''] : left === 0 ? ['Last day today', 'no'] : [`${-left} days after last day`, 'no'];
+}
+
+document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('#tabs button').forEach(x => x.classList.toggle('on', x === b));
+  const t = b.dataset.t; $('#t-list').classList.toggle('hidden', t === 'templates'); $('#t-templates').classList.toggle('hidden', t !== 'templates');
+  if (t !== 'templates') { tab = t; drawList(); } else drawTemplate();
+});
+$('#showDone').onchange = () => drawList();
+
+async function load() {
+  D = await api('getLifecycle');
+  const open = k => (k === 'Exit' ? D.exit : D.onboarding).records.filter(r => r.Status !== 'Completed').length;
+  $('#nOb').textContent = open('Onboarding') ? `(${open('Onboarding')})` : ''; $('#nEx').textContent = open('Exit') ? `(${open('Exit')})` : '';
+  drawList(); drawTemplate();
+  if (cur && $('#dCk').open) openCk(cur);
+}
+
+function drawList() {
+  const isExit = tab === 'Exit', all = $('#showDone').checked;
+  $('#lTitle').textContent = isExit ? 'Exit / full & final' : 'Onboarding';
+  $('#lSub').textContent = isExit ? 'Completing an exit marks the employee "Exited" and disables their login.' : 'Started automatically when a candidate is marked Joined. Target: complete within 3 days of joining.';
+  $('#startBtn').textContent = isExit ? '+ Start exit' : '+ Start onboarding (existing staff)';
+  $('#lHead').innerHTML = `<th>Employee</th><th>Position</th><th>Store</th><th>${isExit ? 'Last working day' : 'Joined'}</th><th>Progress</th><th>Status</th>`;
+  const recs = K().records.filter(r => all || r.Status !== 'Completed').sort((a, b) => (a.CreatedAt < b.CreatedAt ? 1 : -1));
+  $('#lRows').innerHTML = recs.map(r => { const pr = progress(tab, r), [lbl, cls] = isExit ? exTiming(r) : obTiming(r, pr);
+    return `<tr class="click" data-r="${esc(r.RecordId)}"><td><b>${esc(r.EmployeeName)}</b><div class="sub" style="margin:0;font-size:12px">${esc(r.EmpId)}</div></td><td>${esc(pName(r.PositionCode))}</td><td>${esc(emp(r.EmpId).StoreCode || '')}</td>
+      <td>${fmtD(isExit ? r.LastWorkingDay : r.JoiningDate)}</td><td><div style="display:flex;gap:8px;align-items:center"><div class="progress" style="flex:1"><div style="width:${pr.pct}%"></div></div><span style="font-size:12px">${pr.done}/${pr.total}</span></div></td><td><span class="pill ${cls}">${esc(lbl)}</span></td></tr>`; }).join('')
+    || `<tr><td colspan="6" style="color:var(--muted)">${isExit ? 'No exits in progress.' : 'No onboarding in progress.'}</td></tr>`;
+  document.querySelectorAll('#lRows tr.click').forEach(r => r.onclick = () => openCk(r.dataset.r));
+}
+
+// Start onboarding / exit
+$('#startBtn').onclick = () => {
+  const isExit = tab === 'Exit';
+  const busy = new Set(K().records.filter(r => isExit ? r.Status !== 'Completed' : true).map(r => r.EmpId));
+  const list = D.employees.filter(e => e.Status !== 'Exited' && !busy.has(e.EmpId)).sort((a, b) => a.FullName.localeCompare(b.FullName));
+  $('#sT').textContent = isExit ? 'Start exit' : 'Start onboarding';
+  $('#sEmp').innerHTML = '<option value="">— Select —</option>' + list.map(e => `<option value="${esc(e.EmpId)}">${esc(e.FullName)} · ${esc(e.EmpId)} · ${esc(pName(e.PositionCode))}</option>`).join('');
+  $('#exitFields').classList.toggle('hidden', !isExit);
+  $('#sNote').textContent = isExit ? 'The employee status changes to "Notice Period" now, and to "Exited" when the checklist is completed.' : 'Only employees who have never had an onboarding record are listed.';
+  $('#sLwd').value = ''; $('#sReason').value = ''; $('#m-s').textContent = '';
+  $('#dStart').showModal();
+};
+$('#sGo').onclick = async e => {
+  e.preventDefault();
+  if (!$('#sEmp').value) return showMsg($('#m-s'), 'Choose the employee');
+  if (tab === 'Exit' && !$('#sLwd').value) return showMsg($('#m-s'), 'Choose the last working day');
+  try {
+    const r = tab === 'Exit' ? await api('startExit', { empId: $('#sEmp').value, lastWorkingDay: $('#sLwd').value, reason: $('#sReason').value })
+      : await api('startOnboarding', { empId: $('#sEmp').value });
+    $('#dStart').close(); await load(); openCk(r.recordId);
+  } catch (err) { showMsg($('#m-s'), err.message); }
+};
+
+// Checklist
+function openCk(recordId) {
+  cur = recordId;
+  const kind = recordId.startsWith('EX-') ? 'Exit' : 'Onboarding', box = kind === 'Exit' ? D.exit : D.onboarding;
+  const rec = box.records.find(r => r.RecordId === recordId); if (!rec) return;
+  const done = rec.Status === 'Completed', pr = progress(kind, rec), ok = kind === 'Exit' ? 'Done' : 'Yes';
+  $('#kT').textContent = `${kind}: ${rec.EmployeeName}`;
+  $('#kS').innerHTML = `${esc(rec.EmpId)} · ${esc(pName(rec.PositionCode))} · ${kind === 'Exit' ? 'last working day ' + fmtD(rec.LastWorkingDay) + (rec.Reason ? ' · ' + esc(rec.Reason) : '') : 'joined ' + fmtD(rec.JoiningDate)} · <b id="kPr">${pr.done}/${pr.total}</b>${done ? ' · <span class="pill yes">Completed ' + fmtD(rec.CompletedAt) + '</span>' : ''}`;
+  const sections = {};
+  pr.items.forEach(i => { const t = box.template.find(x => x.ItemId === i.ItemId) || { Section: 'Other', Item: i.ItemId, Mandatory: 'Yes' }; (sections[t.Section] = sections[t.Section] || []).push([i, t]); });
+  $('#kBody').innerHTML = Object.keys(sections).sort((a, b) => (parseInt(a) || 99) - (parseInt(b) || 99)).map(sec => `<div class="box"><h4>${esc(sec)}</h4>${sections[sec].map(([i, t]) => `
+    <div class="qrow" style="grid-template-columns:1fr 130px 1fr"><div>${esc(t.Item)}${t.Mandatory === 'No' ? ' <span class="sub" style="font-size:11px">(optional)</span>' : ''}</div>
+    <select class="kst" data-i="${esc(i.ItemId)}" ${done ? 'disabled' : ''}><option value="">— Pending —</option><option ${i.Status === ok ? 'selected' : ''}>${ok}</option><option ${i.Status === 'NA' ? 'selected' : ''}>NA</option></select>
+    <input class="krm" data-i="${esc(i.ItemId)}" value="${esc(i.Remarks)}" placeholder="Remarks" ${done ? 'disabled' : ''}></div>`).join('')}</div>`).join('');
+  document.querySelectorAll('.kst').forEach(s => s.onchange = () => { const n = [...document.querySelectorAll('.kst')].filter(x => x.value).length; $('#kPr').textContent = `${n}/${pr.total}`; });
+  $('#kSave').classList.toggle('hidden', done); $('#kDone').classList.toggle('hidden', done);
+  $('#kDone').textContent = kind === 'Exit' ? 'Complete exit (mark Exited)' : 'Mark onboarding complete';
+  $('#m-k').textContent = '';
+  $('#kSave').onclick = () => save(kind, recordId).then(r => r && showMsg($('#m-k'), 'Saved', true));
+  $('#kDone').onclick = async () => {
+    if (kind === 'Exit' && !confirm(`Complete the exit of ${rec.EmployeeName}?\nThey will be marked Exited and their login (if any) disabled.`)) return;
+    const s = await save(kind, recordId); if (!s) return;
+    try { const r = await api('completeChecklist', { kind, recordId }); await load(); showMsg($('#m-k'), r.message, true); } catch (e) { showMsg($('#m-k'), e.message); }
+  };
+  $('#dCk').open || $('#dCk').showModal();
+}
+async function save(kind, recordId) {
+  const items = [...document.querySelectorAll('.kst')].map(s => ({ ItemId: s.dataset.i, Status: s.value, Remarks: document.querySelector(`.krm[data-i="${CSS.escape(s.dataset.i)}"]`).value }));
+  try { const r = await api('saveChecklist', { kind, recordId, items }); await load(); return r; } catch (e) { showMsg($('#m-k'), e.message); return null; }
+}
+$('#kClose').onclick = () => $('#dCk').close();
+
+// Templates
+function drawTemplate() {
+  const k = $('#tKind').value, rows = (k === 'Exit' ? D.exit : D.onboarding).template;
+  $('#tRows').innerHTML = ''; rows.forEach(addRow);
+}
+function addRow(t = {}) {
+  const tr = document.createElement('tr');
+  tr.innerHTML = `<td><input class="ts" value="${esc(t.Section)}" placeholder="e.g. 1. Documentation" list="secs"></td><td><input class="ti" value="${esc(t.Item)}"><input type="hidden" class="tid" value="${esc(t.ItemId)}"></td>
+    <td><select class="tm"><option ${t.Mandatory !== 'No' ? 'selected' : ''}>Yes</option><option ${t.Mandatory === 'No' ? 'selected' : ''}>No</option></select></td>
+    <td><select class="ta"><option ${t.Active !== 'No' ? 'selected' : ''}>Yes</option><option ${t.Active === 'No' ? 'selected' : ''}>No</option></select></td><td><button type="button">✕</button></td>`;
+  tr.querySelector('button').onclick = () => tr.remove();
+  $('#tRows').appendChild(tr);
+}
+$('#tKind').onchange = drawTemplate;
+$('#tAdd').onclick = () => { const last = [...document.querySelectorAll('.ts')].pop(); addRow({ Section: last ? last.value : '' }); };
+$('#tSave').onclick = async () => {
+  const items = [...document.querySelectorAll('#tRows tr')].map(tr => ({ Section: tr.querySelector('.ts').value, Item: tr.querySelector('.ti').value, ItemId: tr.querySelector('.tid').value, Mandatory: tr.querySelector('.tm').value, Active: tr.querySelector('.ta').value }));
+  try { const r = await api('saveChecklistTemplate', { kind: $('#tKind').value, items }); showMsg($('#m-t'), r.message, true); await load(); } catch (e) { showMsg($('#m-t'), e.message); }
+};
+
+if (S) load().catch(e => alert(e.message));
+</script></body></html>

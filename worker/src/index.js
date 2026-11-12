@@ -299,6 +299,82 @@ export class Hub {
     this.cache.delete(module + '/' + tab);
   }
 
+  async companyMap() {
+    const c = {}; (await this.read('Settings', 'Company')).forEach(r => c[r.Key] = r.Value); return c;
+  }
+  async setCompany(values) {
+    const rows = await this.read('Settings', 'Company');
+    const upd = Object.entries(values).map(([Key, Value]) => ({ Key, Value }));
+    await this.upsertMany('Settings', 'Company', ['Key'], upd);
+    return rows;
+  }
+  async candidate(appNo) {
+    const c = (await this.read('Hiring', 'Candidates')).find(x => x.AppNo === appNo);
+    if (!c) throw new Error('Candidate not found: ' + appNo);
+    return c;
+  }
+  async position(code) {
+    const p = (await this.read('Organisation', 'Positions')).find(x => x.PositionCode === String(code || '').toUpperCase() && x.Active !== 'No');
+    if (!p) throw new Error('Unknown position: ' + code);
+    return p;
+  }
+  async liveToken(token) {
+    const t = (await this.read('Hiring', 'Interview_Tokens')).find(x => x.Token === String(token || ''));
+    if (!t) throw new Error('This link is not valid.');
+    if (t.Status === 'Completed') throw new Error('This interview has already been submitted. Thank you.');
+    if (t.Status !== 'Pending') throw new Error('This link has been replaced by a newer one. Ask HR for the latest link.');
+    if (new Date(t.ExpiresAt) < new Date()) throw new Error('This link has expired (links are valid for 24 hours). Ask HR for a new one.');
+    return t;
+  }
+  async createCandidate(c, by) {
+    const name = String(c.Name || '').trim(), phone = String(c.Phone || '').replace(/\D/g, '');
+    if (!name) throw new Error('Name is required');
+    if (!/^\d{10}$/.test(phone)) throw new Error('Phone must be 10 digits');
+    const pos = await this.position(c.PositionCode);
+    if (!pos.ParentPositionCode) throw new Error('Choose the position you are applying for');
+    const all = await this.read('Hiring', 'Candidates');
+    const dup = all.find(x => String(x.Phone) === phone);
+    const year = new Date().getFullYear(), key = 'AppNext_' + year;
+    const company = await this.companyMap();
+    let n = Number(company[key] || 1), appNo;
+    do { appNo = `APP-${year}-${String(n++).padStart(4, '0')}`; } while (all.find(x => x.AppNo === appNo));
+    await this.setCompany({ [key]: n });
+    const now = new Date().toISOString(), row = {};
+    CAND_FIELDS.forEach(k => row[k] = String(c[k] ?? '').trim());
+    Object.assign(row, { AppNo: appNo, Name: name, Phone: phone, PositionCode: pos.PositionCode, Status: 'New', Date: now.slice(0, 10),
+      DOB: c.DOB ? normDate(c.DOB) : '', IsDuplicatePhone: dup ? 'Yes' : 'No', CreatedAt: now, UpdatedAt: now, Source: row.Source || 'Walk-in' });
+    await this.append('Hiring', 'Candidates', [row]);
+    await this.log('Hiring', appNo, 'Applied', `${pos.PositionName} · ${by}`, by);
+    return { appNo, duplicate: dup ? { AppNo: dup.AppNo, Name: dup.Name, Date: dup.Date } : null };
+  }
+  async recordRejection(c, stage, remarks, by) {
+    await this.append('Hiring', 'Rejected_Candidates', [{ AppNo: c.AppNo, Name: c.Name, Phone: c.Phone, PositionCode: c.PositionCode,
+      Source: c.Source, Stage: stage, RejectionDate: new Date().toISOString().slice(0, 10), RejectedBy: by, Remarks: remarks || '' }]);
+  }
+  // Template rows; fills the default list the first time
+  async checklistTemplate(kind) {
+    let rows = (await this.read('HR_Ops', kind + '_Template')).map(clean);
+    if (!rows.length) {
+      rows = defaultTemplate(kind);
+      await this.rewriteTab('HR_Ops', kind + '_Template', rows);
+    }
+    return rows;
+  }
+  // Creates a record + one item row per active template item (returns existing open record if any)
+  async startChecklist(kind, e, extra) {
+    const recs = await this.read('HR_Ops', kind + '_Records');
+    const open = recs.find(r => r.EmpId === e.EmpId && r.Status !== 'Completed');
+    if (open) { if (kind === 'Exit') throw new Error('An exit is already in progress for this employee'); return clean(open); }
+    if (kind === 'Onboarding' && recs.find(r => r.EmpId === e.EmpId)) throw new Error('Onboarding already completed for this employee');
+    const tpl = (await this.checklistTemplate(kind)).filter(t => t.Active !== 'No');
+    const now = new Date().toISOString();
+    const rec = { RecordId: (kind === 'Exit' ? 'EX-' : 'OB-') + e.EmpId + '-' + now.slice(0, 10).replace(/-/g, ''), EmpId: e.EmpId, EmployeeName: e.FullName,
+      PositionCode: e.PositionCode, Status: 'In Progress', CreatedAt: now, CompletedAt: '', ...(kind === 'Exit' ? extra : { JoiningDate: e.JoiningDate }) };
+    await this.append('HR_Ops', kind + '_Records', [rec]);
+    await this.append('HR_Ops', kind + '_Items', tpl.map(t => ({ RecordId: rec.RecordId, ItemId: t.ItemId, Status: '', Remarks: '', DoneBy: '', DoneAt: '' })));
+    return rec;
+  }
+
   async log(module, recordId, action, remarks, doneBy) {
     try {
       await this.append('ActivityLog', 'Activity_Log', [{ Timestamp: new Date().toISOString(), Module: module, RecordId: recordId, Action: action, Remarks: remarks, DoneBy: doneBy }]);
@@ -369,7 +445,8 @@ const ACTIONS = {
       if (!u || u.Active !== 'Yes' || !(await checkPassword(p.password || '', u.Salt, u.PasswordHash))) {
         throw new Error('Invalid username or password');
       }
-      return { token: await this.makeSession(u), role: u.Role, fullName: u.FullName, stores: u.StoreCodes, empId: u.EmpId || '' };
+      const company = await this.companyMap();
+      return { token: await this.makeSession(u), role: u.Role, fullName: u.FullName, stores: u.StoreCodes, empId: u.EmpId || '', company: company.CompanyName || '' };
     }
   },
 
@@ -395,7 +472,7 @@ const ACTIONS = {
   saveCompany: {
     auth: true, roles: [ROLES.SUPER, ROLES.ADMIN], write: true,
     fn: async function (p, user) {
-      const allowed = ['CompanyName', 'EmpIdPrefix', 'EmpIdDigits', 'EmpIdNextNumber', 'EmpIdPerStore', 'SameStructureAllStores', 'ProbationDays'];
+      const allowed = ['InterviewPassPct', 'CompanyName', 'EmpIdPrefix', 'EmpIdDigits', 'EmpIdNextNumber', 'EmpIdPerStore', 'SameStructureAllStores', 'ProbationDays'];
       if (user.r === ROLES.SUPER) allowed.push('StoreLimit');
       const rows = await this.read('Settings', 'Company');
       for (const [k, v] of Object.entries(p.values || {})) {
@@ -901,6 +978,422 @@ const ACTIONS = {
     }
   },
 
+  // ═════════════ HIRING ═════════════
+  // Public: data for the candidate registration form
+  getApplyForm: {
+    fn: async function () {
+      const company = await this.companyMap();
+      const positions = (await this.read('Organisation', 'Positions')).filter(p => p.Active !== 'No' && p.ParentPositionCode)
+        .map(p => ({ PositionCode: p.PositionCode, PositionName: p.PositionName, StoreCode: p.StoreCode }));
+      const stores = (await this.read('Settings', 'Stores')).filter(s => s.Active !== 'No')
+        .map(s => ({ StoreCode: s.StoreCode, StoreName: s.StoreName, Type: s.Type }));
+      return { companyName: company.CompanyName || '', positions, stores };
+    }
+  },
+
+  // Public: candidate submits the QR form
+  applyCandidate: {
+    write: true,
+    fn: async function (p) {
+      if (p.website) return { appNo: '' };            // spam trap field, real people leave it empty
+      return this.createCandidate(p.candidate || {}, 'Self (QR form)');
+    }
+  },
+
+  addCandidate: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR], write: true,
+    fn: async function (p, user) { return this.createCandidate(p.candidate || {}, user.u); }
+  },
+
+  getHiring: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR],
+    fn: async function () {
+      const company = await this.companyMap();
+      const T = (tab) => this.read('Hiring', tab).then(r => r.map(clean));
+      const [candidates, schedule, tokens, scores, offers, questions] = await Promise.all(
+        ['Candidates', 'Interview_Schedule', 'Interview_Tokens', 'HR_Status', 'Selection_Offer', 'Interview_Questions'].map(T));
+      const positions = (await this.read('Organisation', 'Positions')).filter(p => p.Active !== 'No').map(clean);
+      const stores = (await this.read('Settings', 'Stores')).filter(s => s.Active !== 'No').map(clean);
+      const employees = (await this.read('Organisation', 'Employees')).filter(e => e.Status !== 'Exited')
+        .map(e => ({ EmpId: e.EmpId, FullName: e.FullName, PositionCode: e.PositionCode, StoreCode: e.StoreCode }));
+      return { candidates, schedule, tokens, scores, offers, questions, positions, stores, employees,
+        passPct: Number(company.InterviewPassPct || 60), idFormat: { prefix: company.EmpIdPrefix, digits: company.EmpIdDigits } };
+    }
+  },
+
+  getCandidateTimeline: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR],
+    fn: async function (p) {
+      const rows = (await this.read('ActivityLog', 'Activity_Log')).filter(r => r.RecordId === p.appNo).map(clean);
+      return { timeline: rows.sort((a, b) => (a.Timestamp < b.Timestamp ? 1 : -1)) };
+    }
+  },
+
+  updateCandidate: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR], write: true,
+    fn: async function (p, user) {
+      const c = await this.candidate(p.appNo);
+      const ch = {};
+      CAND_FIELDS.forEach(k => { if (p.changes && k in p.changes) ch[k] = String(p.changes[k] ?? '').trim(); });
+      if (ch.Phone !== undefined && !/^\d{10}$/.test(ch.Phone)) throw new Error('Phone must be 10 digits');
+      if (ch.DOB) ch.DOB = normDate(ch.DOB);
+      if (ch.PositionCode) await this.position(ch.PositionCode);
+      if (p.status) {
+        const allowed = { New: ['Shortlisted', 'Hold', 'Rejected'], Shortlisted: ['Hold', 'Rejected'], '1st Call Done': ['Hold', 'Rejected'],
+          '2nd Call Done': ['Hold', 'Rejected'], 'Interview Scheduled': ['Hold', 'Rejected'], Hold: ['New', 'Rejected'], Rejected: ['New'] };
+        if (!(allowed[c.Status] || []).includes(p.status)) throw new Error(`Cannot move from "${c.Status}" to "${p.status}" here`);
+        ch.Status = p.status;
+        if (p.status === 'Rejected') await this.recordRejection(c, 'Pre Interview', p.note, user.u);
+      }
+      if (p.note) ch.Remarks = p.note;
+      ch.UpdatedAt = new Date().toISOString();
+      await this.update('Hiring', 'Candidates', 'AppNo', c.AppNo, ch);
+      await this.log('Hiring', c.AppNo, p.status ? 'Status: ' + p.status : 'Details updated', p.note || (p.status ? '' : 'Changed: ' + Object.keys(ch).filter(k => k !== 'UpdatedAt').join(', ')), user.u);
+      return { message: 'Saved' };
+    }
+  },
+
+  // step 1 = first call, 2 = second call, 3 = interview scheduled
+  logCall: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR], write: true,
+    fn: async function (p, user) {
+      const c = await this.candidate(p.appNo), step = Number(p.step);
+      const okFrom = { 1: ['Shortlisted', '1st Call Done'], 2: ['1st Call Done', '2nd Call Done'], 3: ['Shortlisted', '1st Call Done', '2nd Call Done', 'Interview Scheduled'] };
+      if (!okFrom[step]) throw new Error('Unknown step');
+      if (!okFrom[step].includes(c.Status)) throw new Error(`Not allowed while the candidate is "${c.Status}"`);
+      if (!p.date) throw new Error('Date is required');
+      const now = new Date().toISOString();
+      const sch = clean((await this.read('Hiring', 'Interview_Schedule')).find(x => x.AppNo === c.AppNo) || { AppNo: c.AppNo, CreatedAt: now });
+      sch.Candidate = c.Name; sch.PositionCode = c.PositionCode;
+      const status = { 1: '1st Call Done', 2: '2nd Call Done', 3: 'Interview Scheduled' }[step];
+      if (step === 1) { sch.Call1Date = p.date; sch.Call1Remarks = p.remarks || ''; }
+      if (step === 2) { sch.Call2Date = p.date; sch.Call2Remarks = p.remarks || ''; }
+      if (step === 3) { sch.InterviewDate = p.date; sch.InterviewRemarks = p.remarks || ''; }
+      sch.Step = Math.max(Number(sch.Step || 0), step); sch.Status = status;
+      await this.upsertMany('Hiring', 'Interview_Schedule', ['AppNo'], [sch]);
+      await this.update('Hiring', 'Candidates', 'AppNo', c.AppNo, { Status: status, UpdatedAt: now });
+      await this.log('Hiring', c.AppNo, status, `${p.date}${p.remarks ? ' · ' + p.remarks : ''}`, user.u);
+      return { message: status };
+    }
+  },
+
+  // Interview questions: PositionCode 'ALL' + Round 'HR' = HR round for everyone; position + 'Round 2' = assessor round
+  saveQuestions: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR], write: true,
+    fn: async function (p, user) {
+      const code = String(p.positionCode || '').toUpperCase(), round = p.round === 'HR' ? 'HR' : 'Round 2';
+      if (code !== 'ALL') await this.position(code);
+      const keep = (await this.read('Hiring', 'Interview_Questions')).map(clean).filter(q => !(q.PositionCode === code && q.Round === round));
+      const qs = (p.questions || []).filter(q => String(q.Question || '').trim()).map((q, i) => questionRow(code, round, i, q));
+      await this.rewriteTab('Hiring', 'Interview_Questions', keep.concat(qs));
+      await this.log('Hiring', code, 'Interview questions saved', `${round}: ${qs.length}`, user.u);
+      return { message: `${qs.length} questions saved` };
+    }
+  },
+
+  importQuestions: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR], write: true,
+    fn: async function (p, user) {
+      const positions = await this.read('Organisation', 'Positions');
+      const rows = (p.rows || []).filter(r => String(r.Question || '').trim());
+      const bad = [...new Set(rows.map(r => String(r.PositionCode || '').trim().toUpperCase()).filter(c => c !== 'ALL' && !positions.find(x => x.PositionCode === c)))];
+      if (bad.length) throw new Error('Nothing imported. Unknown position codes: ' + bad.join(', '));
+      const groups = {};
+      rows.forEach(r => { const code = String(r.PositionCode).trim().toUpperCase(); const round = /hr/i.test(r.Round) ? 'HR' : 'Round 2'; (groups[code + '|' + round] = groups[code + '|' + round] || []).push(r); });
+      const keep = (await this.read('Hiring', 'Interview_Questions')).map(clean).filter(q => !groups[q.PositionCode + '|' + q.Round]);
+      const add = [];
+      Object.entries(groups).forEach(([k, list]) => { const [code, round] = k.split('|'); list.forEach((q, i) => add.push(questionRow(code, round, i, q))); });
+      await this.rewriteTab('Hiring', 'Interview_Questions', keep.concat(add));
+      await this.log('Hiring', 'IMPORT', 'Interview questions imported', `${add.length} questions`, user.u);
+      return { message: `${add.length} questions imported for ${Object.keys(groups).length} rounds` };
+    }
+  },
+
+  saveHrScore: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR], write: true,
+    fn: async function (p, user) {
+      const c = await this.candidate(p.appNo);
+      if (!['Interview Scheduled', 'Interviewed'].includes(c.Status)) throw new Error('Schedule the interview first');
+      const qs = (await this.read('Hiring', 'Interview_Questions')).filter(q => q.PositionCode === 'ALL' && q.Round === 'HR');
+      if (!qs.length) throw new Error('No HR round questions set. Add them under Interview questions.');
+      const res = scoreAnswers(qs, p.scores || {});
+      const prev = clean((await this.read('Hiring', 'HR_Status')).find(x => x.AppNo === c.AppNo) || { AppNo: c.AppNo });
+      prev.HR = JSON.stringify({ ...res, remarks: p.remarks || '', by: user.n || user.u, at: new Date().toISOString() });
+      prev.PositionCode = c.PositionCode; prev.UpdatedAt = new Date().toISOString();
+      await this.upsertMany('Hiring', 'HR_Status', ['AppNo'], [prev]);
+      const r2 = (await this.read('Hiring', 'Interview_Questions')).some(q => q.PositionCode === c.PositionCode && q.Round === 'Round 2');
+      if (!r2 && c.Status !== 'Interviewed') await this.update('Hiring', 'Candidates', 'AppNo', c.AppNo, { Status: 'Interviewed', UpdatedAt: new Date().toISOString() });
+      await this.log('Hiring', c.AppNo, 'HR round scored', `${res.total}/${res.max}`, user.u);
+      return { message: `HR round saved: ${res.total}/${res.max}` };
+    }
+  },
+
+  createInterviewToken: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR], write: true,
+    fn: async function (p, user) {
+      const c = await this.candidate(p.appNo);
+      if (!['Interview Scheduled', 'Interviewed'].includes(c.Status)) throw new Error('Schedule the interview first');
+      if (!String(p.assessorName || '').trim()) throw new Error('Assessor name is required');
+      const qs = (await this.read('Hiring', 'Interview_Questions')).filter(q => q.PositionCode === c.PositionCode && q.Round === 'Round 2');
+      if (!qs.length) throw new Error('No Round 2 questions for this position. Add them under Interview questions.');
+      const now = new Date(), tokens = (await this.read('Hiring', 'Interview_Tokens')).map(clean);
+      const replaced = tokens.filter(t => t.AppNo === c.AppNo && t.Status === 'Pending').map(t => ({ ...t, Status: 'Replaced' }));
+      const token = randomHex(16);
+      const row = { AppNo: c.AppNo, Candidate: c.Name, PositionCode: c.PositionCode, Token: token, AssessorName: p.assessorName.trim(),
+        AssessorPosition: p.assessorPosition || '', CreatedAt: now.toISOString(), ExpiresAt: new Date(now.getTime() + 24 * 3600e3).toISOString(),
+        Status: 'Pending', CompletedAt: '', SuggestedPosition: '', SuggestionReason: '' };
+      await this.upsertMany('Hiring', 'Interview_Tokens', ['Token'], replaced.concat([row]));
+      await this.log('Hiring', c.AppNo, 'Round 2 link created', `Assessor: ${row.AssessorName}`, user.u);
+      return { token, expiresAt: row.ExpiresAt };
+    }
+  },
+
+  // Public (token): assessor opens the Round 2 form
+  getInterviewByToken: {
+    fn: async function (p) {
+      const t = await this.liveToken(p.token);
+      const c = await this.candidate(t.AppNo);
+      const qs = (await this.read('Hiring', 'Interview_Questions')).filter(q => q.PositionCode === c.PositionCode && q.Round === 'Round 2').map(clean)
+        .sort((a, b) => Number(String(a.QuestionId).slice(1)) - Number(String(b.QuestionId).slice(1)));
+      const positions = (await this.read('Organisation', 'Positions')).filter(x => x.Active !== 'No' && x.ParentPositionCode);
+      const role = (await this.read('Library', 'Role_Summary')).find(r => r.PositionCode === c.PositionCode) || {};
+      const duties = (await this.read('Library', 'Role_Responsibilities')).filter(d => d.PositionCode === c.PositionCode).map(d => d.Responsibility);
+      const hr = parseJSON(((await this.read('Hiring', 'HR_Status')).find(x => x.AppNo === c.AppNo) || {}).HR);
+      const company = await this.companyMap();
+      return {
+        companyName: company.CompanyName || '', assessorName: t.AssessorName, expiresAt: t.ExpiresAt,
+        candidate: { Name: c.Name, AppNo: c.AppNo, Qualification: c.Qualification, Experience: c.Experience, Occupation: c.Occupation, CityState: c.CityState, Gender: c.Gender },
+        position: { PositionCode: c.PositionCode, PositionName: (positions.find(x => x.PositionCode === c.PositionCode) || {}).PositionName || c.PositionCode, JobPurpose: role.JobPurpose || '', duties },
+        questions: qs.map(q => ({ QuestionId: q.QuestionId, Question: q.Question, MaxScore: Number(q.MaxScore || 10) })),
+        hrRound: hr ? { total: hr.total, max: hr.max } : null,
+        otherPositions: positions.filter(x => x.PositionCode !== c.PositionCode).map(x => ({ PositionCode: x.PositionCode, PositionName: x.PositionName }))
+      };
+    }
+  },
+
+  // Public (token): assessor submits Round 2
+  submitInterviewScore: {
+    write: true,
+    fn: async function (p) {
+      const t = await this.liveToken(p.token);
+      const c = await this.candidate(t.AppNo);
+      const qs = (await this.read('Hiring', 'Interview_Questions')).filter(q => q.PositionCode === c.PositionCode && q.Round === 'Round 2');
+      const res = scoreAnswers(qs, p.scores || {});
+      const now = new Date().toISOString();
+      const prev = clean((await this.read('Hiring', 'HR_Status')).find(x => x.AppNo === c.AppNo) || { AppNo: c.AppNo });
+      prev.Assigned = JSON.stringify({ ...res, remarks: p.remarks || '', by: t.AssessorName, byPosition: t.AssessorPosition, at: now });
+      prev.PositionCode = c.PositionCode; prev.UpdatedAt = now;
+      await this.upsertMany('Hiring', 'HR_Status', ['AppNo'], [prev]);
+      await this.upsertMany('Hiring', 'Interview_Tokens', ['Token'], [{ ...clean(t), Status: 'Completed', CompletedAt: now,
+        SuggestedPosition: String(p.suggestedPosition || '').toUpperCase(), SuggestionReason: p.suggestionReason || '' }]);
+      await this.update('Hiring', 'Candidates', 'AppNo', c.AppNo, { Status: 'Interviewed', UpdatedAt: now });
+      await this.log('Hiring', c.AppNo, 'Round 2 scored', `${res.total}/${res.max} by ${t.AssessorName}`, t.AssessorName);
+      return { message: 'Thank you. The score has been submitted.' };
+    }
+  },
+
+  // decision: select | probation | reject | newRole
+  decideCandidate: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR], write: true,
+    fn: async function (p, user) {
+      const c = await this.candidate(p.appNo);
+      if (!['Interview Scheduled', 'Interviewed'].includes(c.Status)) throw new Error(`Not allowed while the candidate is "${c.Status}"`);
+      const sc = clean((await this.read('Hiring', 'HR_Status')).find(x => x.AppNo === c.AppNo) || { AppNo: c.AppNo });
+      const hr = parseJSON(sc.HR), r2 = parseJSON(sc.Assigned);
+      const now = new Date().toISOString(), d = p.decision;
+      if (d === 'select' || d === 'probation') {
+        if (!hr) throw new Error('Score the HR round first');
+        const status = d === 'select' ? 'Selected' : 'Selected (Probation)';
+        const total = (hr ? hr.total : 0) + (r2 ? r2.total : 0), max = (hr ? hr.max : 0) + (r2 ? r2.max : 0);
+        await this.append('Hiring', 'Selected_Candidates', [{ AppNo: c.AppNo, Name: c.Name, Phone: c.Phone, PositionCode: c.PositionCode, Source: c.Source,
+          HRScore: hr ? `${hr.total}/${hr.max}` : '', AssignedScore: r2 ? `${r2.total}/${r2.max}` : '', TotalScore: max ? Math.round(total / max * 1000) / 10 + '%' : '',
+          DecisionDate: now.slice(0, 10), DecisionBy: user.u, Remarks: (d === 'probation' ? 'On probation. ' : '') + (p.remarks || '') }]);
+        await this.upsertMany('Hiring', 'Selection_Offer', ['AppNo'], [{ AppNo: c.AppNo, Name: c.Name, PositionCode: c.PositionCode, NoticePeriod: c.NoticePeriod || '',
+          EstDOJ: '', Call1Date: '', OfferLetterKey: '', Status: 'Pending', JoiningDate: '', CreatedAt: now, UpdatedAt: now }]);
+        await this.update('Hiring', 'Candidates', 'AppNo', c.AppNo, { Status: status, UpdatedAt: now });
+        await this.log('Hiring', c.AppNo, status, p.remarks || '', user.u);
+        return { message: status };
+      }
+      if (d === 'reject') {
+        await this.recordRejection(c, 'Post Interview', p.remarks, user.u);
+        await this.update('Hiring', 'Candidates', 'AppNo', c.AppNo, { Status: 'Rejected', Remarks: p.remarks || c.Remarks, UpdatedAt: now });
+        await this.log('Hiring', c.AppNo, 'Rejected after interview', p.remarks || '', user.u);
+        return { message: 'Rejected' };
+      }
+      if (d === 'newRole') {
+        const pos = await this.position(p.newPosition);
+        if (pos.PositionCode === c.PositionCode) throw new Error('Choose a different position');
+        const pending = (await this.read('Hiring', 'Interview_Tokens')).filter(t => t.AppNo === c.AppNo && t.Status === 'Pending').map(t => ({ ...clean(t), Status: 'Replaced' }));
+        if (pending.length) await this.upsertMany('Hiring', 'Interview_Tokens', ['Token'], pending);
+        await this.upsertMany('Hiring', 'HR_Status', ['AppNo'], [{ ...sc, Assigned: '', PositionCode: pos.PositionCode, UpdatedAt: now }]);
+        await this.update('Hiring', 'Candidates', 'AppNo', c.AppNo, { PositionCode: pos.PositionCode, Status: 'Interview Scheduled', UpdatedAt: now });
+        await this.log('Hiring', c.AppNo, 'Moved to new role', `${c.PositionCode} → ${pos.PositionCode}${p.remarks ? ' · ' + p.remarks : ''}`, user.u);
+        return { message: 'Moved to ' + pos.PositionName + '. Run Round 2 for the new role.' };
+      }
+      throw new Error('Unknown decision');
+    }
+  },
+
+  // step: sent | accepted | declined (optional) + details
+  updateOffer: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR], write: true,
+    fn: async function (p, user) {
+      const c = await this.candidate(p.appNo);
+      const off = clean((await this.read('Hiring', 'Selection_Offer')).find(x => x.AppNo === c.AppNo) || null);
+      if (!off || !off.AppNo) throw new Error('No offer record for this candidate');
+      if (['Joined', 'Declined'].includes(off.Status)) throw new Error('This offer is closed');
+      const now = new Date().toISOString(), ch = {};
+      ['NoticePeriod', 'Call1Date'].forEach(k => { if (p.changes && k in p.changes) ch[k] = String(p.changes[k] || ''); });
+      if (p.changes && p.changes.EstDOJ !== undefined) ch.EstDOJ = p.changes.EstDOJ ? normDate(p.changes.EstDOJ) : '';
+      let candStatus = null;
+      if (p.step === 'sent') { if (off.Status !== 'Pending') throw new Error('Offer already sent'); ch.Status = 'Offer Sent'; candStatus = 'Offer Sent'; if (!ch.Call1Date && !off.Call1Date) ch.Call1Date = now.slice(0, 10); }
+      if (p.step === 'accepted') { if (off.Status !== 'Offer Sent') throw new Error('Mark the offer as sent first'); ch.Status = 'Accepted'; candStatus = 'Offer Accepted'; }
+      if (p.step === 'declined') { ch.Status = 'Declined'; candStatus = 'Offer Rejected'; }
+      await this.upsertMany('Hiring', 'Selection_Offer', ['AppNo'], [{ ...off, ...ch, UpdatedAt: now }]);
+      if (candStatus) await this.update('Hiring', 'Candidates', 'AppNo', c.AppNo, { Status: candStatus, UpdatedAt: now });
+      await this.log('Hiring', c.AppNo, candStatus || 'Offer details updated', p.remarks || [ch.NoticePeriod && 'Notice ' + ch.NoticePeriod, ch.EstDOJ && 'Expected joining ' + ch.EstDOJ].filter(Boolean).join(' · '), user.u);
+      return { message: candStatus || 'Saved' };
+    }
+  },
+
+  markJoined: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR], write: true,
+    fn: async function (p, user) {
+      const c = await this.candidate(p.appNo);
+      if (c.Status !== 'Offer Accepted') throw new Error('Only candidates who accepted the offer can be marked joined');
+      const ctx = await this.empContext();
+      const e = normEmp({ EmpId: p.empId || '', FullName: c.Name, Gender: c.Gender, DOB: c.DOB, Phone: c.Phone, Email: c.Email,
+        StoreCode: p.storeCode, PositionCode: c.PositionCode, ReportingManagerId: p.reportingManagerId, JoiningDate: p.joiningDate,
+        EmploymentType: p.employmentType || 'Permanent', Status: 'Probation', CandidateAppNo: c.AppNo });
+      if (!e.JoiningDate) throw new Error('Joining date is required');
+      if (ctx.employees.find(x => x.CandidateAppNo === c.AppNo)) throw new Error('An employee record already exists for this candidate');
+      validateEmp(e, ctx, null);
+      if (!e.EmpId) e.EmpId = (await this.nextEmpIds([e.StoreCode], ctx))[0];
+      if (ctx.employees.find(x => x.EmpId === e.EmpId)) throw new Error('Employee ID already exists: ' + e.EmpId);
+      const now = new Date().toISOString();
+      await this.append('Organisation', 'Employees', [{ ...e, CreatedAt: now, UpdatedAt: now }]);
+      const off = clean((await this.read('Hiring', 'Selection_Offer')).find(x => x.AppNo === c.AppNo) || { AppNo: c.AppNo, Name: c.Name, PositionCode: c.PositionCode, CreatedAt: now });
+      await this.upsertMany('Hiring', 'Selection_Offer', ['AppNo'], [{ ...off, Status: 'Joined', JoiningDate: e.JoiningDate, UpdatedAt: now }]);
+      await this.update('Hiring', 'Candidates', 'AppNo', c.AppNo, { Status: 'Joined', UpdatedAt: now });
+      const ob = await this.startChecklist('Onboarding', e, null);
+      await this.log('Hiring', c.AppNo, 'Joined', `Employee ${e.EmpId}`, user.u);
+      await this.log('Organisation', e.EmpId, 'Employee added (joined)', `${e.FullName} from ${c.AppNo}`, user.u);
+      return { message: `Joined as ${e.EmpId}. Onboarding started.`, empId: e.EmpId, recordId: ob.RecordId };
+    }
+  },
+
+  // ═════════════ ONBOARDING & EXIT ═════════════
+  getLifecycle: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR],
+    fn: async function () {
+      const out = {};
+      for (const kind of ['Onboarding', 'Exit']) {
+        out[kind] = {
+          template: await this.checklistTemplate(kind),
+          records: (await this.read('HR_Ops', kind + '_Records')).map(clean),
+          items: (await this.read('HR_Ops', kind + '_Items')).map(clean)
+        };
+      }
+      const employees = (await this.read('Organisation', 'Employees')).map(e => ({ EmpId: e.EmpId, FullName: e.FullName, PositionCode: e.PositionCode,
+        StoreCode: e.StoreCode, JoiningDate: e.JoiningDate, Status: e.Status, ExitDate: e.ExitDate }));
+      const positions = (await this.read('Organisation', 'Positions')).map(p => ({ PositionCode: p.PositionCode, PositionName: p.PositionName }));
+      return { onboarding: out.Onboarding, exit: out.Exit, employees, positions };
+    }
+  },
+
+  startOnboarding: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR], write: true,
+    fn: async function (p, user) {
+      const e = (await this.read('Organisation', 'Employees')).find(x => x.EmpId === p.empId);
+      if (!e || e.Status === 'Exited') throw new Error('Employee not found');
+      const r = await this.startChecklist('Onboarding', e, null);
+      await this.log('HR_Ops', r.RecordId, 'Onboarding started', e.FullName, user.u);
+      return { message: 'Onboarding started', recordId: r.RecordId };
+    }
+  },
+
+  startExit: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR], write: true,
+    fn: async function (p, user) {
+      const e = (await this.read('Organisation', 'Employees')).find(x => x.EmpId === p.empId);
+      if (!e || e.Status === 'Exited') throw new Error('Employee not found or already exited');
+      if (!p.lastWorkingDay) throw new Error('Last working day is required');
+      const lwd = normDate(p.lastWorkingDay);
+      await this.ensureColumns('HR_Ops', 'Exit_Records', ['Reason']);
+      const r = await this.startChecklist('Exit', e, { LastWorkingDay: lwd, Reason: p.reason || '' });
+      await this.update('Organisation', 'Employees', 'EmpId', e.EmpId, { Status: 'Notice Period', ExitDate: lwd, UpdatedAt: new Date().toISOString() });
+      await this.log('HR_Ops', r.RecordId, 'Exit started', `${e.FullName} · LWD ${lwd}${p.reason ? ' · ' + p.reason : ''}`, user.u);
+      return { message: 'Exit started', recordId: r.RecordId };
+    }
+  },
+
+  saveChecklist: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR], write: true,
+    fn: async function (p, user) {
+      const kind = p.kind === 'Exit' ? 'Exit' : 'Onboarding';
+      const rec = (await this.read('HR_Ops', kind + '_Records')).find(r => r.RecordId === p.recordId);
+      if (!rec) throw new Error('Record not found');
+      if (rec.Status === 'Completed') throw new Error('Already completed');
+      const old = (await this.read('HR_Ops', kind + '_Items')).filter(i => i.RecordId === rec.RecordId);
+      const okVals = kind === 'Exit' ? ['', 'Done', 'NA'] : ['', 'Yes', 'NA'];
+      const now = new Date().toISOString();
+      const rows = (p.items || []).map(it => {
+        if (!okVals.includes(it.Status || '')) throw new Error('Invalid status ' + it.Status);
+        const o = old.find(x => x.ItemId === it.ItemId) || {};
+        const changed = (o.Status || '') !== (it.Status || '') || (o.Remarks || '') !== (it.Remarks || '');
+        return { RecordId: rec.RecordId, ItemId: it.ItemId, Status: it.Status || '', Remarks: it.Remarks || '',
+          DoneBy: changed ? user.u : (o.DoneBy || ''), DoneAt: changed ? now : (o.DoneAt || '') };
+      });
+      if (rows.length) await this.upsertMany('HR_Ops', kind + '_Items', ['RecordId', 'ItemId'], rows);
+      await this.log('HR_Ops', rec.RecordId, kind + ' checklist saved', `${rows.filter(r => r.Status).length} items marked`, user.u);
+      return { message: 'Saved' };
+    }
+  },
+
+  completeChecklist: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR], write: true,
+    fn: async function (p, user) {
+      const kind = p.kind === 'Exit' ? 'Exit' : 'Onboarding';
+      const rec = clean((await this.read('HR_Ops', kind + '_Records')).find(r => r.RecordId === p.recordId) || null);
+      if (!rec || !rec.RecordId) throw new Error('Record not found');
+      if (rec.Status === 'Completed') throw new Error('Already completed');
+      const tpl = await this.checklistTemplate(kind);
+      const items = (await this.read('HR_Ops', kind + '_Items')).filter(i => i.RecordId === rec.RecordId);
+      const missing = items.filter(i => !i.Status && (tpl.find(t => t.ItemId === i.ItemId) || {}).Mandatory !== 'No');
+      if (missing.length) throw new Error(`${missing.length} mandatory items are still open`);
+      const now = new Date().toISOString();
+      await this.upsertMany('HR_Ops', kind + '_Records', ['RecordId'], [{ ...rec, Status: 'Completed', CompletedAt: now }]);
+      if (kind === 'Exit') {
+        await this.update('Organisation', 'Employees', 'EmpId', rec.EmpId, { Status: 'Exited', ExitDate: rec.LastWorkingDay || now.slice(0, 10), UpdatedAt: now });
+        const users = await this.read('Settings', 'Users');
+        const linked = users.filter(u => u.EmpId === rec.EmpId && u.Active !== 'No');
+        for (const u of linked) await this.update('Settings', 'Users', 'Username', u.Username, { Active: 'No' });
+        await this.log('Organisation', rec.EmpId, 'Employee exited', `${rec.EmployeeName}${linked.length ? ' · login disabled' : ''}`, user.u);
+      }
+      await this.log('HR_Ops', rec.RecordId, kind + ' completed', rec.EmployeeName, user.u);
+      return { message: kind === 'Exit' ? 'Exit completed. Employee marked Exited.' : 'Onboarding completed' };
+    }
+  },
+
+  saveChecklistTemplate: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR], write: true,
+    fn: async function (p, user) {
+      const kind = p.kind === 'Exit' ? 'Exit' : 'Onboarding', pre = kind === 'Exit' ? 'EX' : 'OB';
+      const items = (p.items || []).filter(i => String(i.Item || '').trim() && String(i.Section || '').trim());
+      if (!items.length) throw new Error('Add at least one item');
+      const used = new Set(items.map(i => i.ItemId).filter(Boolean));
+      let n = 1;
+      const rows = items.map(i => {
+        let id = i.ItemId;
+        if (!id) { do { id = `${pre}-N-${n++}`; } while (used.has(id)); used.add(id); }
+        return { Section: i.Section.trim(), ItemId: id, Item: i.Item.trim(), Mandatory: i.Mandatory === 'No' ? 'No' : 'Yes', Active: i.Active === 'No' ? 'No' : 'Yes' };
+      });
+      await this.rewriteTab('HR_Ops', kind + '_Template', rows);
+      await this.log('HR_Ops', kind.toUpperCase() + '_TEMPLATE', 'Template saved', `${rows.length} items`, user.u);
+      return { message: 'Template saved. New records will use it.' };
+    }
+  },
+
   changeMyPassword: {
     auth: true, write: true,
     fn: async function (p, user) {
@@ -917,6 +1410,59 @@ const ACTIONS = {
 
 
 // ───────────────────────── Helpers ─────────────────────────
+const HR_ROLES = ['SuperAdmin', 'Admin', 'HR'];
+const CAND_FIELDS = ['Name', 'Phone', 'DOB', 'PositionCode', 'Source', 'Referrer', 'ExpectedSalary', 'ResumeKey', 'WhyJoin', 'WhyHire', 'WeekendOK', 'Value90Days',
+  'OwnVehicle', 'Remarks', 'Email', 'CurrentSalary', 'ReferrerEmpId', 'SourceDetail', 'PhotoKey', 'AadharKey', 'CityState', 'Address', 'Occupation',
+  'Qualification', 'Experience', 'NoticePeriod', 'Gender', 'StoreCode'];
+function parseJSON(s) { try { return s ? JSON.parse(s) : null; } catch (e) { return null; } }
+function randomHex(n) { return [...crypto.getRandomValues(new Uint8Array(n))].map(b => b.toString(16).padStart(2, '0')).join(''); }
+function questionRow(code, round, i, q) {
+  const max = Number(q.MaxScore || 10);
+  if (isNaN(max) || max <= 0) throw new Error('Max score must be a positive number');
+  return { PositionCode: code, Round: round, QuestionId: 'Q' + (i + 1), Question: String(q.Question).trim(), Type: 'score', MaxScore: max, Options: '' };
+}
+function scoreAnswers(qs, scores) {
+  if (!qs.length) throw new Error('No questions found');
+  const out = {}; let total = 0, max = 0;
+  qs.forEach(q => {
+    const m = Number(q.MaxScore || 10), v = scores[q.QuestionId];
+    if (v === undefined || v === '' || v === null) throw new Error('Score every question');
+    const n = Number(v);
+    if (isNaN(n) || n < 0 || n > m) throw new Error(`"${q.Question}": score must be 0 to ${m}`);
+    out[q.QuestionId] = n; total += n; max += m;
+  });
+  return { scores: out, total: Math.round(total * 100) / 100, max };
+}
+function defaultTemplate(kind) {
+  const src = kind === 'Exit' ? [
+    ['1. Resignation & Notice', ['Resignation letter received', 'Exit interview conducted']],
+    ['2. Access Revocation', ['Store access revoked', 'Biometric removed', 'Email deactivated', 'WhatsApp group removed']],
+    ['3. Asset Return', ['Uniform returned', 'Store keys returned', 'ID card returned', 'Company device returned (if any)']],
+    ['4. IT & Systems', ['POS access removed', 'Attendance app removed', 'System credentials revoked']],
+    ['5. Finance & Payroll', ['Last working day confirmed', 'Payroll notified', 'Leave encashment calculated']],
+    ['6. Pending Dues', ['Advance / loan deducted', 'Pending dues cleared']],
+    ['7. FnF Settlement', ['FnF calculated', 'FnF amount approved by management']],
+    ['8. FnF Payment', ['FnF payment processed', 'Payment slip issued']],
+    ['9. Gratuity', ['Gratuity eligibility checked', 'Gratuity paid if applicable']],
+    ['10. PF / ESI', ['PF withdrawal form filled', 'ESI settlement done']],
+    ['11. Experience Letter', ['Experience letter issued']],
+    ['12. Relieving Letter', ['Relieving letter issued']],
+    ['13. Feedback & Closure', ['Reason for exit documented', 'Would rehire noted']]
+  ] : [
+    ['1. Documentation', ['Job application form filled', 'Certificates verified', 'Aadhar copy collected', 'PAN copy collected', 'Passport photo collected', 'Photo uploaded in HR software']],
+    ['2. HR Orientation', ['Employment terms explained', 'Salary & benefits briefed', 'Leave policy explained', 'Attendance system enrolled']],
+    ['3. IT & Systems', ['Email ID created', 'Added to WhatsApp group', 'Attendance app installed', 'POS / billing access given']],
+    ['4. Uniform & Grooming', ['Uniform size noted', 'Uniform issued', 'Grooming standards explained']],
+    ['5. Floor Induction', ['Store layout walkthrough', 'Department-wise product briefing', 'Customer handling SOP explained']],
+    ['6. Buddy Assignment', ['Buddy / mentor assigned', 'Introduced to team', 'First-day feedback taken']],
+    ['7. Compliance', ['Code of conduct signed', 'NDA signed (if applicable)', 'Emergency contact collected']]
+  ];
+  const pre = kind === 'Exit' ? 'EX' : 'OB', rows = [];
+  src.forEach(([sec, items], si) => items.forEach((it, ii) => rows.push({ Section: sec, ItemId: `${pre}-${si + 1}-${ii + 1}`, Item: it,
+    Mandatory: /if any|if applicable/.test(it) ? 'No' : 'Yes', Active: 'Yes' })));
+  return rows;
+}
+
 const POLICY_EXTRA = ['Content', 'UpdatedBy', 'UpdatedAt'];
 const POLICY_CATS = ['HR Policy', 'SOP', 'Code of Conduct', 'Compliance', 'Operations', 'Customer Service', 'Other'];
 function policyRow(x, old, all, by) {

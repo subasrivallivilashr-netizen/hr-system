@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hiring</title><link rel="stylesheet" href="assets/app.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script></head>
+<body>
+<header class="top" id="top"></header>
+<main>
+  <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:end">
+    <div class="tabs" id="tabs" style="margin-bottom:0;flex:1">
+      <button data-t="pipeline" class="on">Pipeline</button>
+      <button data-t="interviews">Interviews <b id="nInt"></b></button>
+      <button data-t="offers">Offers <b id="nOff"></b></button>
+      <button data-t="questions">Interview questions</button>
+    </div>
+    <div style="display:flex;gap:6px;padding-bottom:6px"><button id="qrBtn">Application link / QR</button><button class="btn" id="walkin">+ Add walk-in</button></div>
+  </div>
+  <div style="height:16px"></div>
+
+  <!-- PIPELINE -->
+  <section id="t-pipeline" class="card">
+    <div class="chips" id="chips"></div>
+    <div class="filters">
+      <div><label>Search</label><input id="q" placeholder="Name, phone or App No"></div>
+      <div><label>Position</label><select id="fPos"></select></div>
+      <div><label>Source</label><select id="fSrc"></select></div>
+    </div>
+    <div class="tbl-wrap"><table><thead><tr><th>App No</th><th>Name</th><th>Phone</th><th>Position</th><th>Source</th><th>Applied</th><th>Status</th></tr></thead><tbody id="pRows"></tbody></table></div>
+  </section>
+
+  <!-- INTERVIEWS -->
+  <section id="t-interviews" class="card hidden">
+    <h2>Interviews</h2><p class="sub">Candidates with an interview scheduled or done. Pass mark: <b id="passLbl"></b> (HR + Round 2 combined).</p>
+    <div class="tbl-wrap"><table><thead><tr><th>Candidate</th><th>Position</th><th>Interview</th><th>HR round</th><th>Round 2</th><th>Result</th></tr></thead><tbody id="iRows"></tbody></table></div>
+  </section>
+
+  <!-- OFFERS -->
+  <section id="t-offers" class="card hidden">
+    <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center">
+      <div><h2>Offers</h2><p class="sub">Selected candidates: offer call → accepted → joined.</p></div>
+      <label style="font-weight:400"><input type="checkbox" id="offAll" style="width:auto"> Show joined and declined</label>
+    </div>
+    <div class="tbl-wrap"><table><thead><tr><th>Candidate</th><th>Position</th><th>Selected</th><th>Offer status</th><th>Notice period</th><th>Expected joining</th></tr></thead><tbody id="oRows"></tbody></table></div>
+  </section>
+
+  <!-- QUESTIONS -->
+  <section id="t-questions" class="hidden">
+    <div class="split">
+      <section class="card">
+        <h2>Rounds</h2>
+        <ul class="plist" id="qList"></ul>
+        <div style="margin-top:12px"><label>Pass mark (% of HR + Round 2)</label><div style="display:flex;gap:6px"><input id="passPct" type="number" min="1" max="100"><button id="savePass">Save</button></div><span class="msg" id="m-pass"></span></div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px"><button id="qTpl">Download template</button><button id="qImp">Import Excel</button><input type="file" id="qFile" accept=".xlsx,.xls" class="hidden"></div>
+      </section>
+      <section class="card" id="qView"></section>
+    </div>
+  </section>
+</main>
+
+<!-- Candidate dialog -->
+<dialog id="dC" class="wide"><div style="padding:20px">
+  <div style="display:flex;justify-content:space-between;gap:8px;align-items:start"><div><h3 id="cT" style="margin:0"></h3><p class="sub" id="cS" style="margin:4px 0 0"></p></div><button id="cClose">Close</button></div>
+  <div class="dlg-body">
+    <div class="kv" id="cKv"></div>
+    <div class="box"><h4>Next step</h4><div id="cAct"></div><div id="cForm"></div><span class="msg" id="m-c"></span></div>
+    <div class="box"><h4>Edit details</h4><div class="grid" id="cEdit"></div><div class="row-end" style="margin-top:8px"><button id="cSaveEdit">Save details</button></div></div>
+    <div class="box"><h4>History</h4><ul class="tl" id="cTl"><li>Loading…</li></ul></div>
+  </div>
+</div></dialog>
+
+<!-- Interview dialog -->
+<dialog id="dI" class="wide"><div style="padding:20px">
+  <div style="display:flex;justify-content:space-between;gap:8px;align-items:start"><div><h3 id="iT" style="margin:0"></h3><p class="sub" id="iS" style="margin:4px 0 0"></p></div><button id="iClose">Close</button></div>
+  <div class="dlg-body">
+    <div class="box"><h4>HR round</h4><div id="iHr"></div></div>
+    <div class="box"><h4>Round 2 (assessor)</h4><div id="iR2"></div></div>
+    <div class="box"><h4>Result & decision</h4><div id="iRes"></div><span class="msg" id="m-i"></span></div>
+  </div>
+</div></dialog>
+
+<!-- Offer dialog -->
+<dialog id="dO" class="wide"><div style="padding:20px">
+  <div style="display:flex;justify-content:space-between;gap:8px;align-items:start"><div><h3 id="oT" style="margin:0"></h3><p class="sub" id="oS" style="margin:4px 0 0"></p></div><button id="oClose">Close</button></div>
+  <div class="dlg-body">
+    <div class="box"><h4>Offer details</h4>
+      <div class="grid"><div><label>Notice period</label><input id="oNotice"></div><div><label>Expected joining date</label><input id="oDoj" type="date"></div><div><label>Offer call date</label><input id="oCall" type="date"></div></div>
+      <label>Remarks</label><input id="oRem" placeholder="Optional">
+      <div class="actions" id="oAct"></div>
+    </div>
+    <div class="box hidden" id="joinBox"><h4>Mark joined</h4>
+      <p class="sub">Creates the employee record (status: Probation) and starts onboarding.</p>
+      <div class="grid">
+        <div><label>Joining date</label><input id="jDate" type="date"></div>
+        <div><label>Store</label><select id="jStore"></select></div>
+        <div style="grid-column:1/-1"><label>Reporting manager</label><select id="jMgr"></select></div>
+        <div><label>Employment type</label><select id="jType"><option>Permanent</option><option>Contract</option><option>Trainee</option></select></div>
+        <div><label>Employee ID <span class="hint">(blank = auto)</span></label><input id="jId"></div>
+      </div>
+      <div class="actions"><button class="btn btn-ok" id="jGo">Mark joined</button></div>
+    </div>
+    <span class="msg" id="m-o"></span>
+  </div>
+</div></dialog>
+
+<!-- QR dialog -->
+<dialog id="dQ"><div style="padding:20px;text-align:center">
+  <h3>Application form</h3><p class="sub">Candidates scan this or open the link to apply.</p>
+  <div id="qr" style="display:inline-block;padding:10px;background:#fff"></div>
+  <div class="linkbox" style="margin-top:10px"><input id="qLink" readonly><button id="qCopy">Copy</button></div>
+  <div class="row-end"><button onclick="print()">Print</button><button id="qClose">Close</button></div>
+</div></dialog>
+
+<script src="assets/app.js"></script>
+<script>
+const S = guard(['SuperAdmin', 'Admin', 'HR']);
+renderTop('hiring');
+const isAdmin = S && ['SuperAdmin', 'Admin'].includes(S.role);
+const BASE = location.href.replace(/[^/]*([?#].*)?$/, '');
+const STATUSES = ['New', 'Shortlisted', '1st Call Done', '2nd Call Done', 'Interview Scheduled', 'Interviewed', 'Selected', 'Selected (Probation)', 'Offer Sent', 'Offer Accepted', 'Offer Rejected', 'Joined', 'Hold', 'Rejected'];
+const CLOSED = ['Joined', 'Rejected', 'Offer Rejected'];
+let D = null, chip = 'Open', curApp = null;
+
+// ── helpers ──
+const pos = c => D.positions.find(p => p.PositionCode === c) || {};
+const pName = c => pos(c).PositionName || c || '—';
+const cand = a => D.candidates.find(c => c.AppNo === a);
+const sched = a => D.schedule.find(s => s.AppNo === a) || {};
+const offer = a => D.offers.find(o => o.AppNo === a);
+const js = s => { try { return s ? JSON.parse(s) : null; } catch { return null; } };
+const scores = a => { const r = D.scores.find(s => s.AppNo === a) || {}; return { hr: js(r.HR), r2: js(r.Assigned) }; };
+const tokenOf = a => D.tokens.filter(t => t.AppNo === a).sort((x, y) => (x.CreatedAt < y.CreatedAt ? 1 : -1))[0];
+const qsFor = (code, round) => D.questions.filter(q => q.PositionCode === code && q.Round === round).sort((a, b) => Number(String(a.QuestionId).slice(1)) - Number(String(b.QuestionId).slice(1)));
+const fmtD = d => d ? String(d).slice(0, 10).split('-').reverse().join('-') : '';
+const fmtDT = d => { if (!d) return ''; const [x, t] = String(d).split('T'); return fmtD(x) + (t ? ' ' + t.slice(0, 5) : ''); };
+const daysAgo = d => d ? Math.max(0, Math.floor((Date.now() - new Date(d)) / 864e5)) : '';
+const pct = (s) => s ? Math.round(s.total / s.max * 1000) / 10 : null;
+const pill = s => `<span class="pill ${['Joined', 'Offer Accepted', 'Selected', 'Selected (Probation)', 'Accepted'].includes(s) ? 'yes' : ['Rejected', 'Offer Rejected', 'Declined'].includes(s) ? 'no' : ''}">${esc(s)}</span>`;
+function result(a) {
+  const c = cand(a), sc = scores(a), needR2 = qsFor(c.PositionCode, 'Round 2').length > 0;
+  if (!sc.hr || (needR2 && !sc.r2)) return { ready: false, needR2, sc };
+  const t = sc.hr.total + (sc.r2 ? sc.r2.total : 0), m = sc.hr.max + (sc.r2 ? sc.r2.max : 0), p = Math.round(t / m * 1000) / 10;
+  return { ready: true, needR2, sc, pct: p, pass: p >= D.passPct };
+}
+
+// ── tabs ──
+document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('#tabs button').forEach(x => x.classList.toggle('on', x === b));
+  ['pipeline', 'interviews', 'offers', 'questions'].forEach(t => $('#t-' + t).classList.toggle('hidden', t !== b.dataset.t));
+});
+async function load() {
+  D = await api('getHiring');
+  const keepP = $('#fPos').value, keepS = $('#fSrc').value;
+  $('#fPos').innerHTML = '<option value="">All</option>' + D.positions.filter(p => p.ParentPositionCode).map(p => `<option value="${esc(p.PositionCode)}">${esc(p.PositionName)}</option>`).join('');
+  $('#fSrc').innerHTML = '<option value="">All</option>' + [...new Set(D.candidates.map(c => c.Source).filter(Boolean))].sort().map(s => `<option>${esc(s)}</option>`).join('');
+  $('#fPos').value = keepP; $('#fSrc').value = keepS;
+  $('#passLbl').textContent = D.passPct + '%'; $('#passPct').value = D.passPct; $('#passPct').disabled = $('#savePass').disabled = !isAdmin;
+  drawPipeline(); drawInterviews(); drawOffers(); drawQList();
+  if (curApp && $('#dC').open) openCand(curApp);
+  if (curApp && $('#dI').open) openInterview(curApp);
+  if (curApp && $('#dO').open) openOffer(curApp);
+}
+
+// ── PIPELINE ──
+function drawPipeline() {
+  const counts = {}; D.candidates.forEach(c => counts[c.Status] = (counts[c.Status] || 0) + 1);
+  const open = D.candidates.filter(c => !CLOSED.includes(c.Status)).length;
+  $('#chips').innerHTML = [['Open', open], ['All', D.candidates.length], ...STATUSES.filter(s => counts[s]).map(s => [s, counts[s]])]
+    .map(([s, n]) => `<span class="chip ${chip === s ? 'on' : ''}" data-s="${esc(s)}">${esc(s)}<b>${n}</b></span>`).join('');
+  document.querySelectorAll('.chip').forEach(c => c.onclick = () => { chip = c.dataset.s; drawPipeline(); });
+  const q = $('#q').value.trim().toLowerCase(), fp = $('#fPos').value, fs = $('#fSrc').value;
+  const list = D.candidates.filter(c => (chip === 'All' || (chip === 'Open' ? !CLOSED.includes(c.Status) : c.Status === chip)) &&
+    (!fp || c.PositionCode === fp) && (!fs || c.Source === fs) && (!q || [c.Name, c.Phone, c.AppNo].join(' ').toLowerCase().includes(q)))
+    .sort((a, b) => (a.CreatedAt < b.CreatedAt ? 1 : -1));
+  $('#pRows').innerHTML = list.map(c => `<tr class="click" data-a="${esc(c.AppNo)}"><td><b>${esc(c.AppNo)}</b></td><td>${esc(c.Name)}${c.IsDuplicatePhone === 'Yes' ? ' <span class="dup" title="This phone number applied before">REPEAT</span>' : ''}</td><td>${esc(c.Phone)}</td><td>${esc(pName(c.PositionCode))}</td><td>${esc(c.Source)}</td><td>${fmtD(c.Date)} <span class="sub">(${daysAgo(c.Date)}d)</span></td><td>${pill(c.Status)}</td></tr>`).join('')
+    || '<tr><td colspan="7" style="color:var(--muted)">No candidates here.</td></tr>';
+  document.querySelectorAll('#pRows tr.click').forEach(r => r.onclick = () => openCand(r.dataset.a));
+}
+$('#q').addEventListener('input', drawPipeline); ['fPos', 'fSrc'].forEach(i => $('#' + i).addEventListener('change', drawPipeline));
+
+function openCand(a) {
+  curApp = a; const c = cand(a), s = sched(a);
+  $('#cT').textContent = `${c.Name} — ${pName(c.PositionCode)}`;
+  $('#cS').innerHTML = `${esc(c.AppNo)} · applied ${fmtD(c.Date)} (${daysAgo(c.Date)} days ago) · ${pill(c.Status)}${c.IsDuplicatePhone === 'Yes' ? ' · <span class="dup">applied before with this phone</span>' : ''}`;
+  const F = [['Phone', c.Phone], ['Email', c.Email], ['Gender', c.Gender], ['Date of birth', fmtD(c.DOB)], ['City', c.CityState], ['Preferred store', c.StoreCode],
+    ['Source', c.Source + (c.Referrer ? ' · ' + c.Referrer : '') + (c.ReferrerEmpId ? ' (' + c.ReferrerEmpId + ')' : '')], ['Qualification', c.Qualification], ['Experience', c.Experience],
+    ['Occupation', c.Occupation], ['Current salary', c.CurrentSalary], ['Expected salary', c.ExpectedSalary], ['Notice period', c.NoticePeriod], ['Weekend work', c.WeekendOK],
+    ['Own vehicle', c.OwnVehicle], ['Resume', c.ResumeKey ? `<a href="${esc(c.ResumeKey)}" target="_blank" rel="noopener">Open</a>` : ''],
+    ['1st call', s.Call1Date ? fmtD(s.Call1Date) + ' · ' + (s.Call1Remarks || '') : ''], ['2nd call', s.Call2Date ? fmtD(s.Call2Date) + ' · ' + (s.Call2Remarks || '') : ''],
+    ['Interview', s.InterviewDate ? fmtDT(s.InterviewDate) + ' · ' + (s.InterviewRemarks || '') : ''], ['Remarks', c.Remarks]];
+  $('#cKv').innerHTML = F.filter(x => x[1]).map(([k, v]) => `<div><span>${k}</span>${k === 'Resume' ? v : esc(v)}</div>`).join('') +
+    ['WhyJoin', 'WhyHire', 'Value90Days'].filter(k => c[k]).map(k => `<div style="grid-column:1/-1"><span>${{ WhyJoin: 'Why join us', WhyHire: 'Why hire them', Value90Days: 'First 90 days' }[k]}</span>${esc(c[k])}</div>`).join('');
+  // next-step buttons
+  const B = (label, fn, cls = '') => `<button class="${cls}" data-f="${fn}">${label}</button>`;
+  const m = {
+    'New': [B('Shortlist', 'st:Shortlisted', 'btn'), B('Hold', 'st:Hold'), B('Reject', 'st:Rejected', 'btn-err')],
+    'Shortlisted': [B('Log 1st call', 'call:1', 'btn'), B('Schedule interview', 'call:3'), B('Hold', 'st:Hold'), B('Reject', 'st:Rejected', 'btn-err')],
+    '1st Call Done': [B('Log 2nd call', 'call:2', 'btn'), B('Schedule interview', 'call:3'), B('Hold', 'st:Hold'), B('Reject', 'st:Rejected', 'btn-err')],
+    '2nd Call Done': [B('Schedule interview', 'call:3', 'btn'), B('Hold', 'st:Hold'), B('Reject', 'st:Rejected', 'btn-err')],
+    'Interview Scheduled': [B('Open interview', 'go:interview', 'btn'), B('Reschedule', 'call:3'), B('Hold', 'st:Hold'), B('Reject', 'st:Rejected', 'btn-err')],
+    'Interviewed': [B('Open interview', 'go:interview', 'btn')],
+    'Hold': [B('Reactivate', 'st:New', 'btn'), B('Reject', 'st:Rejected', 'btn-err')],
+    'Rejected': [B('Re-engage (back to New)', 'st:New', 'btn')]
+  }[c.Status] || (['Selected', 'Selected (Probation)', 'Offer Sent', 'Offer Accepted'].includes(c.Status) ? [B('Open offer', 'go:offer', 'btn')] : []);
+  $('#cAct').innerHTML = m.length ? `<div class="actions">${m.join('')}</div>` : '<p class="sub">No further steps.</p>';
+  $('#cForm').innerHTML = ''; $('#m-c').textContent = '';
+  document.querySelectorAll('#cAct [data-f]').forEach(b => b.onclick = () => candAction(c, b.dataset.f));
+  // edit
+  const E = (k, l, t = 'text') => `<div><label>${l}</label><input data-e="${k}" type="${t}" value="${esc(c[k])}"></div>`;
+  $('#cEdit').innerHTML = E('Phone', 'Phone') + E('Email', 'Email') + `<div><label>Position</label><select data-e="PositionCode">${D.positions.filter(p => p.ParentPositionCode).map(p => `<option value="${esc(p.PositionCode)}" ${p.PositionCode === c.PositionCode ? 'selected' : ''}>${esc(p.PositionName)}</option>`).join('')}</select></div>` +
+    E('ExpectedSalary', 'Expected salary') + E('NoticePeriod', 'Notice period') + E('Remarks', 'Remarks');
+  $('#dC').open || $('#dC').showModal();
+  api('getCandidateTimeline', { appNo: a }).then(r => {
+    $('#cTl').innerHTML = r.timeline.map(t => `<li><b>${esc(t.Action)}</b> ${t.Remarks ? '— ' + esc(t.Remarks) : ''}<br><span>${fmtDT(t.Timestamp)} · ${esc(t.DoneBy)}</span></li>`).join('') || '<li>No history yet.</li>';
+  }).catch(() => $('#cTl').innerHTML = '<li>History not available.</li>');
+}
+function candAction(c, f) {
+  const [kind, arg] = f.split(':');
+  if (kind === 'go') { $('#dC').close(); return arg === 'interview' ? openInterview(c.AppNo) : openOffer(c.AppNo); }
+  if (kind === 'st') {
+    let note = '';
+    if (arg === 'Rejected' || arg === 'Hold') { note = prompt(`Reason for ${arg === 'Hold' ? 'putting on hold' : 'rejecting'}:`); if (note === null) return; }
+    return run(() => api('updateCandidate', { appNo: c.AppNo, status: arg, note }), '#m-c');
+  }
+  const step = Number(arg), isInt = step === 3;
+  const s = sched(c.AppNo);
+  $('#cForm').innerHTML = `<div class="grid" style="margin-top:10px"><div><label>${isInt ? 'Interview date & time' : 'Call date'}</label><input id="cfD" type="${isInt ? 'datetime-local' : 'date'}" value="${isInt ? (s.InterviewDate || '') : new Date().toISOString().slice(0, 10)}"></div>
+    <div style="grid-column:span 2"><label>${isInt ? 'Place / notes' : 'What was discussed'}</label><input id="cfR"></div></div><div class="actions"><button class="btn" id="cfGo">Save</button></div>`;
+  $('#cfGo').onclick = () => { if (!$('#cfD').value) return showMsg($('#m-c'), 'Choose the date'); run(() => api('logCall', { appNo: c.AppNo, step, date: $('#cfD').value, remarks: $('#cfR').value }), '#m-c'); };
+}
+$('#cSaveEdit').onclick = () => { const ch = {}; document.querySelectorAll('[data-e]').forEach(i => ch[i.dataset.e] = i.value); run(() => api('updateCandidate', { appNo: curApp, changes: ch }), '#m-c'); };
+$('#cClose').onclick = () => $('#dC').close();
+async function run(fn, msgEl) {
+  try { const r = await fn(); if (r && r.message) showMsg($(msgEl), r.message, true); await load(); return r; }
+  catch (e) { showMsg($(msgEl), e.message); }
+}
+
+// ── INTERVIEWS ──
+function drawInterviews() {
+  const list = D.candidates.filter(c => ['Interview Scheduled', 'Interviewed'].includes(c.Status)).sort((a, b) => (sched(a.AppNo).InterviewDate || '') < (sched(b.AppNo).InterviewDate || '') ? -1 : 1);
+  $('#nInt').textContent = list.length ? `(${list.length})` : '';
+  $('#iRows').innerHTML = list.map(c => {
+    const r = result(c.AppNo), t = tokenOf(c.AppNo);
+    const r2 = !r.needR2 ? '<span class="sub">Not needed</span>' : r.sc.r2 ? `${r.sc.r2.total}/${r.sc.r2.max}` : t && t.Status === 'Pending' ? (new Date(t.ExpiresAt) < new Date() ? '<span class="under">Link expired</span>' : 'Link sent') : '<span class="sub">Not assigned</span>';
+    return `<tr class="click" data-a="${esc(c.AppNo)}"><td><b>${esc(c.Name)}</b><div class="sub" style="margin:0;font-size:12px">${esc(c.AppNo)}</div></td><td>${esc(pName(c.PositionCode))}</td><td>${fmtDT(sched(c.AppNo).InterviewDate)}</td>
+      <td>${r.sc.hr ? `${r.sc.hr.total}/${r.sc.hr.max}` : '<span class="sub">Pending</span>'}</td><td>${r2}</td><td>${r.ready ? `<span class="${r.pass ? 'pass' : 'fail'}" style="font-weight:700">${r.pct}% ${r.pass ? 'PASS' : 'FAIL'}</span>` : '—'}</td></tr>`;
+  }).join('') || '<tr><td colspan="6" style="color:var(--muted)">No interviews scheduled. Schedule one from the Pipeline tab.</td></tr>';
+  document.querySelectorAll('#iRows tr.click').forEach(r => r.onclick = () => openInterview(r.dataset.a));
+}
+function openInterview(a) {
+  curApp = a; const c = cand(a), s = sched(a), r = result(a), t = tokenOf(a);
+  $('#iT').textContent = `${c.Name} — ${pName(c.PositionCode)}`;
+  $('#iS').innerHTML = `${esc(c.AppNo)} · ${pill(c.Status)}${s.InterviewDate ? ' · interview ' + fmtDT(s.InterviewDate) : ''}`;
+  const live = ['Interview Scheduled', 'Interviewed'].includes(c.Status);
+  // HR round
+  const hq = qsFor('ALL', 'HR'), hr = r.sc.hr;
+  $('#iHr').innerHTML = !hq.length ? '<p class="sub">No HR round questions yet. Add them in the <b>Interview questions</b> tab.</p>' :
+    hq.map(q => `<div class="qrow"><div>${esc(q.Question)}</div><div><input class="score hrq" type="number" min="0" max="${esc(q.MaxScore)}" step="0.5" data-q="${esc(q.QuestionId)}" value="${hr && hr.scores ? esc(hr.scores[q.QuestionId] ?? '') : ''}" ${live ? '' : 'disabled'}> <span class="sub">/ ${esc(q.MaxScore)}</span></div></div>`).join('') +
+    `<label>Remarks</label><input id="hrRem" value="${esc(hr ? hr.remarks : '')}" ${live ? '' : 'disabled'}>` +
+    (hr ? `<p class="sub" style="margin:6px 0 0">Saved: <b>${hr.total}/${hr.max}</b> (${pct(hr)}%) by ${esc(hr.by)}</p>` : '') +
+    (live ? '<div class="actions"><button class="btn" id="hrSave">Save HR round</button></div>' : '');
+  if (live && hq.length) $('#hrSave').onclick = () => { const sc = {}; document.querySelectorAll('.hrq').forEach(i => sc[i.dataset.q] = i.value); run(() => api('saveHrScore', { appNo: a, scores: sc, remarks: $('#hrRem').value }), '#m-i'); };
+  // Round 2
+  const rq = qsFor(c.PositionCode, 'Round 2');
+  let h = '';
+  if (!rq.length) h = `<p class="sub">No Round 2 questions for ${esc(pName(c.PositionCode))}. The decision can be made after the HR round, or add questions in the <b>Interview questions</b> tab.</p>`;
+  else if (r.sc.r2) {
+    h = `<p><b>${r.sc.r2.total}/${r.sc.r2.max}</b> (${pct(r.sc.r2)}%) by ${esc(r.sc.r2.by)}${r.sc.r2.byPosition ? ' · ' + esc(r.sc.r2.byPosition) : ''} on ${fmtDT(r.sc.r2.at)}</p>` +
+      rq.map(q => `<div class="qrow"><div>${esc(q.Question)}</div><div>${esc(r.sc.r2.scores[q.QuestionId] ?? '—')} / ${esc(q.MaxScore)}</div></div>`).join('') +
+      (r.sc.r2.remarks ? `<p><span class="sub">Remarks:</span> ${esc(r.sc.r2.remarks)}</p>` : '') +
+      (t && t.SuggestedPosition ? `<p><span class="sub">Assessor suggests:</span> <b>${esc(pName(t.SuggestedPosition))}</b> ${t.SuggestionReason ? '— ' + esc(t.SuggestionReason) : ''}</p>` : '');
+  } else {
+    if (t && t.Status === 'Pending') {
+      const link = BASE + 'interview.html?t=' + t.Token, expired = new Date(t.ExpiresAt) < new Date();
+      h += `<p>Link for <b>${esc(t.AssessorName)}</b> ${expired ? '<span class="under">— expired, create a new one</span>' : '· valid until ' + fmtDT(t.ExpiresAt.slice(0, 16))}</p>
+        <div class="linkbox"><input readonly value="${esc(link)}" id="r2link"><button id="r2copy">Copy</button><a class="btn" style="text-decoration:none;padding:9px 14px;border-radius:8px" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(`Interview assessment for ${c.Name} (${pName(c.PositionCode)}): ${link}`)}">WhatsApp</a></div><p class="sub">Create a new link below if needed (the old one stops working).</p>`;
+    }
+    if (live) h += `<div class="grid"><div><label>Assessor name</label><input id="asName"></div><div><label>Assessor position</label><input id="asPos" placeholder="e.g. Floor Manager"></div></div><div class="actions"><button class="btn" id="mkLink">${t && t.Status === 'Pending' ? 'Create new link' : 'Create assessor link (24 h)'}</button></div>`;
+  }
+  $('#iR2').innerHTML = h;
+  if ($('#r2copy')) $('#r2copy').onclick = () => { navigator.clipboard.writeText($('#r2link').value); $('#r2copy').textContent = 'Copied'; };
+  if ($('#mkLink')) $('#mkLink').onclick = () => { if (!$('#asName').value.trim()) return showMsg($('#m-i'), 'Enter the assessor name'); run(() => api('createInterviewToken', { appNo: a, assessorName: $('#asName').value, assessorPosition: $('#asPos').value }), '#m-i'); };
+  // Result
+  let res = '';
+  if (!r.ready) res = `<p class="sub">Waiting for ${!r.sc.hr ? 'the HR round' : ''}${!r.sc.hr && r.needR2 && !r.sc.r2 ? ' and ' : ''}${r.needR2 && !r.sc.r2 ? 'Round 2' : ''}.</p>`;
+  else res = `<p class="result ${r.pass ? 'pass' : 'fail'}">${r.pct}% — ${r.pass ? 'PASS' : 'FAIL'} <span class="sub" style="font-weight:400;font-size:13px">(pass mark ${D.passPct}%)</span></p>`;
+  const sug = t && t.SuggestedPosition ? t.SuggestedPosition : '';
+  if (live) res += `<div class="actions">
+      <button class="btn btn-ok" data-d="select" ${r.ready ? '' : 'disabled'}>Select</button>
+      <button data-d="probation" ${r.ready ? '' : 'disabled'}>Select on probation</button>
+      <button class="btn-err" data-d="reject">Reject</button></div>
+      <div class="grid" style="margin-top:10px"><div><label>Or move to another position</label><select id="nr">${D.positions.filter(p => p.ParentPositionCode && p.PositionCode !== c.PositionCode).map(p => `<option value="${esc(p.PositionCode)}" ${p.PositionCode === sug ? 'selected' : ''}>${esc(p.PositionName)}</option>`).join('')}</select></div><div><label>&nbsp;</label><button data-d="newRole">Assign new role</button></div></div>`;
+  $('#iRes').innerHTML = res; $('#m-i').textContent = '';
+  document.querySelectorAll('#iRes [data-d]').forEach(b => b.onclick = async () => {
+    const d = b.dataset.d;
+    const label = { select: 'Select', probation: 'Select on probation', reject: 'Reject', newRole: 'Move to ' + pName($('#nr').value) }[d];
+    const remarks = prompt(`${label} ${c.Name}? Add a remark (optional):`, ''); if (remarks === null) return;
+    const out = await run(() => api('decideCandidate', { appNo: a, decision: d, remarks, newPosition: d === 'newRole' ? $('#nr').value : '' }), '#m-i');
+    if (out && (d === 'select' || d === 'probation')) { $('#dI').close(); openOffer(a); }
+    else if (out && d === 'reject') $('#dI').close();
+  });
+  $('#dI').open || $('#dI').showModal();
+}
+$('#iClose').onclick = () => $('#dI').close();
+
+// ── OFFERS ──
+function drawOffers() {
+  const all = $('#offAll').checked;
+  const list = D.offers.filter(o => all || !['Joined', 'Declined'].includes(o.Status)).sort((a, b) => (a.CreatedAt < b.CreatedAt ? 1 : -1));
+  $('#nOff').textContent = D.offers.filter(o => !['Joined', 'Declined'].includes(o.Status)).length ? `(${D.offers.filter(o => !['Joined', 'Declined'].includes(o.Status)).length})` : '';
+  $('#oRows').innerHTML = list.map(o => { const c = cand(o.AppNo) || {};
+    return `<tr class="click" data-a="${esc(o.AppNo)}"><td><b>${esc(o.Name)}</b><div class="sub" style="margin:0;font-size:12px">${esc(o.AppNo)} · ${esc(c.Status || '')}</div></td><td>${esc(pName(o.PositionCode))}</td><td>${fmtD(o.CreatedAt)}</td><td>${pill(o.Status)}</td><td>${esc(o.NoticePeriod)}</td><td>${fmtD(o.Status === 'Joined' ? o.JoiningDate : o.EstDOJ)}</td></tr>`; }).join('')
+    || '<tr><td colspan="6" style="color:var(--muted)">No open offers.</td></tr>';
+  document.querySelectorAll('#oRows tr.click').forEach(r => r.onclick = () => openOffer(r.dataset.a));
+}
+$('#offAll').onchange = drawOffers;
+function openOffer(a) {
+  curApp = a; const o = offer(a), c = cand(a);
+  if (!o) return alert('No offer record yet.');
+  $('#oT').textContent = `${c.Name} — ${pName(o.PositionCode)}`;
+  $('#oS').innerHTML = `${esc(a)} · ${pill(c.Status)} · offer ${pill(o.Status)}`;
+  const closed = ['Joined', 'Declined'].includes(o.Status);
+  $('#oNotice').value = o.NoticePeriod || ''; $('#oDoj').value = o.EstDOJ || ''; $('#oCall').value = o.Call1Date || ''; $('#oRem').value = '';
+  ['oNotice', 'oDoj', 'oCall', 'oRem'].forEach(i => $('#' + i).disabled = closed);
+  const A = [];
+  if (!closed) A.push('<button data-s="">Save details</button>');
+  if (o.Status === 'Pending') A.push('<button class="btn" data-s="sent">Offer made (call / letter sent)</button>');
+  if (o.Status === 'Offer Sent') A.push('<button class="btn btn-ok" data-s="accepted">Candidate accepted</button>');
+  if (['Pending', 'Offer Sent'].includes(o.Status)) A.push('<button class="btn-err" data-s="declined">Candidate declined</button>');
+  $('#oAct').innerHTML = A.join('');
+  document.querySelectorAll('#oAct [data-s]').forEach(b => b.onclick = () => {
+    if (b.dataset.s === 'declined' && !confirm(`Mark that ${c.Name} declined the offer?`)) return;
+    run(() => api('updateOffer', { appNo: a, step: b.dataset.s || null, remarks: $('#oRem').value, changes: { NoticePeriod: $('#oNotice').value, EstDOJ: $('#oDoj').value, Call1Date: $('#oCall').value } }), '#m-o');
+  });
+  const canJoin = c.Status === 'Offer Accepted';
+  $('#joinBox').classList.toggle('hidden', !canJoin);
+  if (canJoin) {
+    $('#jDate').value = o.EstDOJ || new Date().toISOString().slice(0, 10);
+    const stores = D.stores;
+    $('#jStore').innerHTML = stores.map(s => `<option value="${esc(s.StoreCode)}" ${s.StoreCode === c.StoreCode ? 'selected' : ''}>${esc(s.StoreCode)} · ${esc(s.StoreName)}</option>`).join('');
+    const fillMgr = () => {
+      const parent = pos(o.PositionCode).ParentPositionCode, st = $('#jStore').value;
+      const inP = D.employees.filter(e => e.PositionCode === parent), pick = inP.filter(e => e.StoreCode === st).concat(inP.filter(e => e.StoreCode !== st)), rest = D.employees.filter(e => !pick.includes(e));
+      const opt = e => `<option value="${esc(e.EmpId)}">${esc(e.FullName)} · ${esc(pName(e.PositionCode))} · ${esc(e.StoreCode)}</option>`;
+      $('#jMgr').innerHTML = '<option value="">— Select —</option>' + (pick.length ? `<optgroup label="${esc(pName(parent))}">${pick.map(opt).join('')}</optgroup>` : '') + (rest.length ? `<optgroup label="Others">${rest.map(opt).join('')}</optgroup>` : '');
+      if (pick.length && pick[0].StoreCode === st) $('#jMgr').value = pick[0].EmpId;
+    };
+    $('#jStore').onchange = fillMgr; fillMgr();
+    $('#jId').value = '';
+    $('#jGo').onclick = async () => {
+      if (!$('#jMgr').value) return showMsg($('#m-o'), 'Choose the reporting manager');
+      const r = await run(() => api('markJoined', { appNo: a, joiningDate: $('#jDate').value, storeCode: $('#jStore').value, reportingManagerId: $('#jMgr').value, employmentType: $('#jType').value, empId: $('#jId').value.trim() }), '#m-o');
+      if (r && r.empId) { $('#dO').close(); alert(`${c.Name} joined as ${r.empId}.\nOnboarding has started — see "Onboarding & Exit".`); }
+    };
+  }
+  $('#m-o').textContent = '';
+  $('#dO').open || $('#dO').showModal();
+}
+$('#oClose').onclick = () => $('#dO').close();
+
+// ── QUESTIONS ──
+let qSel = 'ALL|HR';
+function drawQList() {
+  const items = [['ALL|HR', 'HR round (all positions)']].concat(D.positions.filter(p => p.ParentPositionCode).map(p => [p.PositionCode + '|Round 2', 'Round 2 · ' + p.PositionName]));
+  $('#qList').innerHTML = items.map(([k, l]) => { const [code, round] = k.split('|'); const n = qsFor(code, round).length;
+    return `<li data-k="${esc(k)}" class="${k === qSel ? 'on' : ''}"><span>${esc(l)}</span><span class="${n ? '' : 'sub'}" style="font-size:12px">${n || '—'}</span></li>`; }).join('');
+  document.querySelectorAll('#qList li').forEach(li => li.onclick = () => { qSel = li.dataset.k; drawQList(); });
+  drawQEditor();
+}
+function drawQEditor() {
+  const [code, round] = qSel.split('|'), qs = qsFor(code, round);
+  $('#qView').innerHTML = `<h2>${round === 'HR' ? 'HR round — asked to every candidate' : 'Round 2 — ' + esc(pName(code))}</h2>
+    <p class="sub">${round === 'HR' ? 'Scored by HR in the Interviews tab.' : 'Scored by the assessor through the 24-hour link. Leave empty if this position needs no Round 2.'}</p>
+    <div id="qRows"></div><button type="button" id="qAdd">+ Add question</button>
+    <div class="row-end"><span class="msg" id="m-q"></span><button class="btn" id="qSave">Save</button></div>`;
+  const add = (q = {}) => { const d = document.createElement('div'); d.className = 'duty'; d.style.gridTemplateColumns = '1fr 90px 36px';
+    d.innerHTML = `<input class="qq" value="${esc(q.Question)}" placeholder="Question or skill to score"><input class="qm" type="number" min="1" value="${esc(q.MaxScore || 10)}" title="Max score"><button type="button">✕</button>`;
+    d.querySelector('button').onclick = () => d.remove(); $('#qRows').appendChild(d); };
+  (qs.length ? qs : [{}]).forEach(add);
+  $('#qAdd').onclick = () => add();
+  $('#qSave').onclick = () => run(() => api('saveQuestions', { positionCode: code, round, questions: [...document.querySelectorAll('#qRows .duty')].map(d => ({ Question: d.querySelector('.qq').value, MaxScore: d.querySelector('.qm').value })) }), '#m-q');
+}
+$('#savePass').onclick = () => run(() => api('saveCompany', { values: { InterviewPassPct: $('#passPct').value } }), '#m-pass');
+const QCOLS = [['PositionCode', 'Position Code'], ['Round', 'Round'], ['Question', 'Question'], ['MaxScore', 'Max Score']];
+$('#qTpl').onclick = () => {
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([QCOLS.map(c => c[1]), ...D.questions.map(q => QCOLS.map(([k]) => q[k]))]), 'Questions');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Position Code', 'Position Name'], ['ALL', 'HR round (every candidate)'], ...D.positions.filter(p => p.ParentPositionCode).map(p => [p.PositionCode, p.PositionName])]), 'Positions (reference)');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Rules'], ['HR round: Position Code = ALL, Round = HR.'], ['Round 2: the position code, Round = Round 2.'], ['Max Score: usually 10.'], ['Importing replaces the questions of every round that appears in the file.']]), 'Read Me');
+  XLSX.writeFile(wb, 'Interview_Questions_Template.xlsx');
+};
+$('#qImp').onclick = () => $('#qFile').click();
+$('#qFile').onchange = async () => {
+  const f = $('#qFile').files[0]; if (!f) return; $('#qFile').value = '';
+  const wb = XLSX.read(await f.arrayBuffer());
+  const aoa = XLSX.utils.sheet_to_json(wb.Sheets['Questions'] || wb.Sheets[wb.SheetNames[0]], { header: 1, raw: false, defval: '' });
+  const h = aoa.findIndex(r => r.some(c => String(c).trim().toLowerCase() === 'question')); if (h < 0) return alert('Use the template (needs a "Question" column).');
+  const head = aoa[h].map(x => String(x).trim().toLowerCase()), idx = QCOLS.map(([k, l]) => [k, head.indexOf(l.toLowerCase())]);
+  const rows = aoa.slice(h + 1).map(r => { const o = {}; idx.forEach(([k, i]) => o[k] = i >= 0 ? String(r[i]).trim() : ''); return o; }).filter(o => o.Question);
+  if (!confirm(`Import ${rows.length} questions?`)) return;
+  try { const r = await api('importQuestions', { rows }); alert(r.message); await load(); } catch (e) { alert(e.message); }
+};
+
+// ── header buttons ──
+$('#walkin').onclick = () => window.open('apply.html?hr=1', '_blank');
+$('#qrBtn').onclick = () => {
+  const link = BASE + 'apply.html'; $('#qLink').value = link; $('#qr').innerHTML = '';
+  try { new QRCode($('#qr'), { text: link, width: 200, height: 200 }); } catch { $('#qr').textContent = 'QR library not loaded'; }
+  $('#dQ').showModal();
+};
+$('#qCopy').onclick = () => { navigator.clipboard.writeText($('#qLink').value); $('#qCopy').textContent = 'Copied'; };
+$('#qClose').onclick = () => $('#dQ').close();
+
+if (S) load().catch(e => alert(e.message));
+</script></body></html>

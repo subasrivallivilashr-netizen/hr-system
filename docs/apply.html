@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Job Application</title><link rel="stylesheet" href="assets/app.css"></head>
+<body>
+<div class="pub-head"><h1 id="co">Job Application</h1><p>Fill in your details. HR will contact you.</p></div>
+<div class="pub">
+  <form class="card" id="f" novalidate>
+    <h2>About you</h2>
+    <div class="grid">
+      <div><label class="req">Full name</label><input name="Name" required autocomplete="name"></div>
+      <div><label class="req">Mobile number</label><input name="Phone" required inputmode="numeric" maxlength="10" placeholder="10 digits"></div>
+      <div><label>Gender</label><select name="Gender"><option value="">—</option><option>Male</option><option>Female</option><option>Other</option></select></div>
+      <div><label>Date of birth</label><input name="DOB" type="date"></div>
+      <div><label>Email</label><input name="Email" type="email"></div>
+      <div><label>City / State</label><input name="CityState" placeholder="e.g. Belagavi, Karnataka"></div>
+    </div>
+    <label>Address</label><input name="Address">
+
+    <h2 style="margin-top:20px">The job</h2>
+    <div class="grid">
+      <div><label class="req">Position applying for</label><select name="PositionCode" id="pos" required></select></div>
+      <div><label>Preferred location</label><select name="StoreCode" id="store"></select></div>
+      <div><label>How did you hear about us?</label><select name="Source" id="src"><option>Walk-in</option><option>Employee Reference</option><option>Advertisement</option><option>Online / Social media</option><option>Other</option></select></div>
+      <div id="refBox" class="hidden"><label>Referred by (name)</label><input name="Referrer"></div>
+      <div id="refIdBox" class="hidden"><label>Referrer's employee ID</label><input name="ReferrerEmpId"></div>
+    </div>
+
+    <h2 style="margin-top:20px">Education & experience</h2>
+    <div class="grid">
+      <div><label>Highest qualification</label><input name="Qualification" placeholder="e.g. 12th, B.Com"></div>
+      <div><label>Experience</label><input name="Experience" placeholder="e.g. 2 years in retail"></div>
+      <div><label>Current occupation</label><input name="Occupation" placeholder="e.g. Sales at XYZ, Student"></div>
+      <div><label>Current salary (₹/month)</label><input name="CurrentSalary" inputmode="numeric"></div>
+      <div><label>Expected salary (₹/month)</label><input name="ExpectedSalary" inputmode="numeric"></div>
+      <div><label>Notice period</label><input name="NoticePeriod" placeholder="e.g. Immediate, 15 days"></div>
+    </div>
+
+    <h2 style="margin-top:20px">A few questions</h2>
+    <label>Why do you want to join us?</label><textarea name="WhyJoin"></textarea>
+    <label>Why should we hire you?</label><textarea name="WhyHire"></textarea>
+    <label>What will you achieve in your first 90 days?</label><textarea name="Value90Days"></textarea>
+    <div class="grid">
+      <div><label>Can you work on weekends?</label><div class="choice"><label><input type="radio" name="WeekendOK" value="Yes"> Yes</label><label><input type="radio" name="WeekendOK" value="No"> No</label></div></div>
+      <div><label>Do you have your own vehicle?</label><div class="choice"><label><input type="radio" name="OwnVehicle" value="Yes"> Yes</label><label><input type="radio" name="OwnVehicle" value="No"> No</label></div></div>
+    </div>
+    <label>Resume link (optional)</label><input name="ResumeKey" placeholder="Google Drive / LinkedIn link">
+    <input class="trap" name="website" tabindex="-1" autocomplete="off" aria-hidden="true">
+
+    <button class="btn block" id="b">Submit application</button>
+    <div class="msg" id="m"></div>
+  </form>
+  <div class="card done-box hidden" id="done">
+    <div>Application received</div><div class="big" id="appNo"></div>
+    <p class="sub">Please note this number. HR will call you on your mobile.</p>
+    <button class="btn" id="again">Submit another application</button>
+  </div>
+</div>
+<script src="assets/app.js"></script>
+<script>
+const byHR = new URLSearchParams(location.search).get('hr') === '1' && Session.get();
+async function init() {
+  try {
+    const d = await api('getApplyForm');
+    if (d.companyName) { $('#co').textContent = d.companyName + ' — Job Application'; document.title = d.companyName + ' — Apply'; }
+    $('#pos').innerHTML = '<option value="">— Select —</option>' + d.positions.map(p => `<option value="${esc(p.PositionCode)}">${esc(p.PositionName)}</option>`).join('');
+    $('#store').innerHTML = '<option value="">Any</option>' + d.stores.filter(s => s.Type !== 'Head Office').map(s => `<option value="${esc(s.StoreCode)}">${esc(s.StoreName)}</option>`).join('');
+  } catch (e) { showMsg($('#m'), 'Form could not load: ' + e.message); }
+}
+$('#src').onchange = () => { const r = $('#src').value === 'Employee Reference'; $('#refBox').classList.toggle('hidden', !r); $('#refIdBox').classList.toggle('hidden', !r); };
+$('#f').addEventListener('submit', async e => {
+  e.preventDefault();
+  const f = $('#f'), o = {};
+  new FormData(f).forEach((v, k) => o[k] = String(v).trim());
+  if (!o.Name) return showMsg($('#m'), 'Please enter your name');
+  if (!/^\d{10}$/.test(o.Phone)) return showMsg($('#m'), 'Please enter a 10-digit mobile number');
+  if (!o.PositionCode) return showMsg($('#m'), 'Please choose the position');
+  const website = o.website; delete o.website;
+  const b = $('#b'); b.disabled = true; b.textContent = 'Submitting…';
+  try {
+    const r = byHR ? await api('addCandidate', { candidate: o }) : await api('applyCandidate', { candidate: o, website });
+    $('#appNo').textContent = r.appNo || 'Received';
+    f.classList.add('hidden'); $('#done').classList.remove('hidden'); window.scrollTo(0, 0);
+  } catch (err) { showMsg($('#m'), err.message); }
+  b.disabled = false; b.textContent = 'Submit application';
+});
+$('#again').onclick = () => { $('#f').reset(); $('#f').classList.remove('hidden'); $('#done').classList.add('hidden'); $('#m').textContent = ''; };
+init();
+</script></body></html>

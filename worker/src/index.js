@@ -477,20 +477,33 @@ export class Hub {
   }
 
   // Creates a tab (with headings) if it does not exist yet
+  // Creates a tab with its header row when missing. Safe when two requests ask at the same time.
   async ensureTab(module, tab, headers) {
-    this.tabsOk = this.tabsOk || new Set();
-    if (this.tabsOk.has(module + '/' + tab)) return;
-    const id = await this.ssId(module);
-    const meta = await this.gfetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}?fields=sheets.properties`);
-    if (!(meta.sheets || []).find(s => s.properties.title === tab)) {
-      await this.gfetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}:batchUpdate`, { method: 'POST',
-        body: JSON.stringify({ requests: [{ addSheet: { properties: { title: tab, gridProperties: { rowCount: 1000, columnCount: Math.max(12, headers.length) } } } }] }) });
-      await this.gfetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}/values/${encodeURIComponent(tab)}!A1?valueInputOption=RAW`,
-        { method: 'PUT', body: JSON.stringify({ values: [headers] }) });
-      if (this.headCache) this.headCache.delete(module + '/' + tab);
-      this.cache.delete(module + '/' + tab);
-    }
-    this.tabsOk.add(module + '/' + tab);
+    this.tabsOk = this.tabsOk || new Set(); this.tabLocks = this.tabLocks || new Map();
+    const key = module + '/' + tab;
+    if (this.tabsOk.has(key)) return;
+    if (this.tabLocks.has(key)) return this.tabLocks.get(key);          // someone is already creating it: wait for them
+    const job = (async () => {
+      const id = await this.ssId(module);
+      const meta = await this.gfetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}?fields=sheets.properties`);
+      let exists = !!(meta.sheets || []).find(s => s.properties.title === tab);
+      if (!exists) {
+        try {
+          await this.gfetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}:batchUpdate`, { method: 'POST',
+            body: JSON.stringify({ requests: [{ addSheet: { properties: { title: tab, gridProperties: { rowCount: 1000, columnCount: Math.max(12, headers.length) } } } }] }) });
+        } catch (e) { if (!/already exists/i.test(e.message)) throw e; }
+      }
+      // Header row missing (new tab, or a tab created half-way earlier) → write it
+      const h = await this.gfetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}/values/${encodeURIComponent(tab)}!1:1`);
+      if (!(h.values && h.values[0] && h.values[0].length))
+        await this.gfetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}/values/${encodeURIComponent(tab)}!A1?valueInputOption=RAW`,
+          { method: 'PUT', body: JSON.stringify({ values: [headers] }) });
+      if (this.headCache) this.headCache.delete(key);
+      this.cache.delete(key);
+      this.tabsOk.add(key);
+    })();
+    this.tabLocks.set(key, job);
+    try { await job; } finally { this.tabLocks.delete(key); }
   }
   async letterTabs() {
     await this.ensureTab('Settings', 'Letter_Templates', ['Type', 'Title', 'Ref', 'Body', 'CustomHTML', 'UpdatedBy', 'UpdatedAt']);

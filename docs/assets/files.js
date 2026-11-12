@@ -45,7 +45,7 @@ async function openFile(fileId) {
     const url = URL.createObjectURL(await res.blob());
     if (w) w.location.href = url; else location.href = url;
     setTimeout(() => URL.revokeObjectURL(url), 60000);
-  } catch (e) { if (w) w.close(); alert(e.message); }
+  } catch (e) { if (w) w.close(); uiAlert(e.message); }
 }
 
 // Photos (thumbnails) for lists — any role
@@ -80,8 +80,8 @@ async function docBox(el, ref, opts = {}) {
       <div class="msg fm"></div><p class="sub" style="margin:4px 0 0">PDF, JPG or PNG · up to 5 MB.</p>`}`;
   el.querySelectorAll('[data-open]').forEach(b => b.onclick = () => openFile(b.dataset.open));
   el.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
-    if (!confirm('Delete this file? It goes to the Drive trash.')) return;
-    try { await api('deleteFile', { fileId: b.dataset.del }); await docBox(el, ref, opts); opts.onChange && opts.onChange(); } catch (e) { alert(e.message); }
+    if (!await uiConfirm('Delete this file? It goes to the Drive trash.', { okText: 'Delete', danger: true })) return;
+    try { await api('deleteFile', { fileId: b.dataset.del }); await docBox(el, ref, opts); opts.onChange && opts.onChange(); } catch (e) { uiAlert(e.message); }
   });
   const up = el.querySelector('.fu');
   if (up) up.onclick = async () => {

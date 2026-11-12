@@ -2,7 +2,7 @@
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Letter</title><link rel="stylesheet" href="assets/app.css"><style id="lstyle"></style>
 <style>
-body{background:#e9ecf1}.bar{position:sticky;top:0;z-index:5;background:#fff;border-bottom:1px solid var(--line);padding:10px 16px;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+body{background:#ece9e1}.bar{position:sticky;top:0;z-index:5;background:#fff;border-bottom:1px solid var(--line);padding:10px 16px;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .bar h2{margin:0;font-size:15px;flex:1}.wrap{display:grid;grid-template-columns:300px 1fr;gap:16px;padding:16px;align-items:start}
 .side{position:sticky;top:64px}.stage{overflow:auto}
 @media (max-width:900px){.wrap{grid-template-columns:1fr}.side{position:static}.page{transform-origin:top left}}
@@ -54,8 +54,8 @@ async function init() {
 }
 $('#issue').onclick = async () => {
   const empty = [...document.querySelectorAll('[data-k]')].filter(i => !i.value.trim()).map(i => i.dataset.k);
-  if (empty.length && !confirm('These are empty and will be left blank:\n' + empty.join(', ') + '\n\nIssue anyway?')) return;
-  if (!confirm('Issue this letter? It gets the next letter number and is saved in the register.')) return;
+  if (empty.length && !await uiConfirm('These are empty and will be left blank:\n' + empty.join(', ') + '\n\nIssue anyway?')) return;
+  if (!await uiConfirm('Issue this letter? It gets the next letter number and is saved in the register.')) return;
   $('#issue').disabled = true;
   try {
     const r = await api('issueLetter', { type, ref, title: L.template.Title, body: L.template.Body, customHtml: L.template.CustomHTML || '', fields: { ...L.fields, ...inputs }, salary: L.salary });

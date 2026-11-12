@@ -166,8 +166,8 @@ function show(code) {
   $('#addK').onclick = () => openK(null);
   document.querySelectorAll('[data-e]').forEach(b => b.onclick = () => openK(ks[b.dataset.e]));
   document.querySelectorAll('[data-r]').forEach(b => b.onclick = async () => {
-    const k = ks[b.dataset.r]; if (!confirm(`Remove "${k.KpiName}" from ${p.PositionName}?`)) return;
-    try { await api('removeKpiParam', { positionCode: code, kpiName: k.KpiName }); await load(); } catch (e) { alert(e.message); }
+    const k = ks[b.dataset.r]; if (!await uiConfirm(`Remove "${k.KpiName}" from ${p.PositionName}?`)) return;
+    try { await api('removeKpiParam', { positionCode: code, kpiName: k.KpiName }); await load(); } catch (e) { uiAlert(e.message); }
   });
 }
 
@@ -211,12 +211,12 @@ $('#file').onchange = async () => {
   const ws = wb.Sheets['KPI Parameters'] || wb.Sheets[wb.SheetNames[0]];
   const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '' });
   const h = aoa.findIndex(r => r.some(c => String(c).trim().toLowerCase() === 'kpi name'));
-  if (h < 0) return alert('Could not find a "KPI Name" column. Use the downloaded template.');
+  if (h < 0) return uiAlert('Could not find a "KPI Name" column. Use the downloaded template.');
   const head = aoa[h].map(x => String(x).trim().toLowerCase());
   const idx = COLS.map(([k, l]) => [k, head.findIndex(x => x.startsWith(l.toLowerCase()))]);
   const rows = aoa.slice(h + 1).map(r => { const o = {}; idx.forEach(([k, i]) => o[k] = i >= 0 ? String(r[i]).trim() : ''); return o; }).filter(o => o.PositionCode && o.KpiName);
-  if (!confirm(`Import ${rows.length} KPIs? Positions in the file will have their KPIs replaced.`)) return;
-  try { const r = await api('importKpiParams', { rows }); alert(r.message); await load(); } catch (e) { alert(e.message); }
+  if (!await uiConfirm(`Import ${rows.length} KPIs? Positions in the file will have their KPIs replaced.`)) return;
+  try { const r = await api('importKpiParams', { rows }); uiAlert(r.message); await load(); } catch (e) { uiAlert(e.message); }
 };
 
 
@@ -248,7 +248,7 @@ const locked = () => M && M.cycle.Status === 'Locked';
 const pillCls = s => s === 'Approved' ? 'yes' : s === 'Returned' ? 'no' : '';
 
 async function loadMonth() {
-  try { M = await api('getKpiMonth', { month: $('#month').value }); } catch (e) { alert(e.message); return; }
+  try { M = await api('getKpiMonth', { month: $('#month').value }); } catch (e) { uiAlert(e.message); return; }
   const stores = [...new Set(M.employees.map(e => e.StoreCode))].sort();
   const keep = $('#eStore').value;
   $('#eStore').innerHTML = '<option value="">All</option>' + stores.map(s => `<option>${esc(s)}</option>`).join(''); $('#eStore').value = keep;
@@ -303,9 +303,9 @@ $('#eSub').onclick = ev => { ev.preventDefault(); saveOne(true); };
 
 $('#subAll').onclick = async () => {
   const ready = M.employees.filter(e => ['Draft', 'Returned'].includes(statusOf(e.EmpId)));
-  if (!ready.length) return alert('Nothing in Draft to submit.');
-  if (!confirm(`Submit ${ready.length} employees to HR? Only those with all KPIs filled will go.`)) return;
-  try { const r = await api('saveKpiEntries', { month: M.month, submit: true, items: ready.map(e => ({ EmpId: e.EmpId })) }); alert(r.message + (r.errors.length ? '\n\n' + r.errors.join('\n') : '')); await loadMonth(); } catch (e) { alert(e.message); }
+  if (!ready.length) return uiAlert('Nothing in Draft to submit.');
+  if (!await uiConfirm(`Submit ${ready.length} employees to HR? Only those with all KPIs filled will go.`)) return;
+  try { const r = await api('saveKpiEntries', { month: M.month, submit: true, items: ready.map(e => ({ EmpId: e.EmpId })) }); uiAlert(r.message + (r.errors.length ? '\n\n' + r.errors.join('\n') : '')); await loadMonth(); } catch (e) { uiAlert(e.message); }
 };
 
 // Team sheet: one row per employee x KPI
@@ -323,12 +323,12 @@ $('#tfile').onchange = async () => {
   const wb = XLSX.read(await f.arrayBuffer());
   const aoa = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: '' });
   const h = aoa[0].map(x => String(x).trim().toLowerCase()), iE = h.indexOf('employee id'), iK = h.indexOf('kpi'), iA = h.indexOf('actual');
-  if (iE < 0 || iK < 0 || iA < 0) return alert('Use the downloaded team sheet (columns Employee ID, KPI, Actual).');
+  if (iE < 0 || iK < 0 || iA < 0) return uiAlert('Use the downloaded team sheet (columns Employee ID, KPI, Actual).');
   const by = {}; aoa.slice(1).forEach(r => { if (!r[iE] || r[iA] === '') return; (by[r[iE]] = by[r[iE]] || {})[String(r[iK]).trim()] = r[iA]; });
   const items = Object.entries(by).map(([EmpId, actuals]) => ({ EmpId, actuals }));
-  if (!items.length) return alert('No actual values found in the file.');
-  if (!confirm(`Save figures for ${items.length} employees as draft?`)) return;
-  try { const r = await api('saveKpiEntries', { month: M.month, submit: false, items }); alert(r.message + (r.errors.length ? '\n\n' + r.errors.join('\n') : '')); await loadMonth(); } catch (e) { alert(e.message); }
+  if (!items.length) return uiAlert('No actual values found in the file.');
+  if (!await uiConfirm(`Save figures for ${items.length} employees as draft?`)) return;
+  try { const r = await api('saveKpiEntries', { month: M.month, submit: false, items }); uiAlert(r.message + (r.errors.length ? '\n\n' + r.errors.join('\n') : '')); await loadMonth(); } catch (e) { uiAlert(e.message); }
 };
 
 // Approval
@@ -350,17 +350,17 @@ function drawApprove() {
 }
 $('#apAll').onchange = () => document.querySelectorAll('.apc').forEach(c => c.checked = $('#apAll').checked);
 const picked = () => [...document.querySelectorAll('.apc:checked')].map(c => c.value);
-$('#okSel').onclick = async () => { const ids = picked(); if (!ids.length) return alert('Tick employees first.');
+$('#okSel').onclick = async () => { const ids = picked(); if (!ids.length) return uiAlert('Tick employees first.');
   try { const r = await api('approveKpi', { month: M.month, decision: 'approve', empIds: ids }); showMsg($('#m-ap'), r.message + (r.errors.length ? ' — ' + r.errors.join('; ') : ''), !r.errors.length); await loadMonth(); } catch (e) { showMsg($('#m-ap'), e.message); } };
-$('#retSel').onclick = async () => { const ids = picked(); if (!ids.length) return alert('Tick employees first.');
-  const remarks = prompt('Reason for returning (the manager will see this):'); if (remarks === null) return;
+$('#retSel').onclick = async () => { const ids = picked(); if (!ids.length) return uiAlert('Tick employees first.');
+  const remarks = await uiPrompt('Reason for returning (the manager will see this):', { required: true, okText: 'Return' }); if (remarks === null) return;
   try { const r = await api('approveKpi', { month: M.month, decision: 'return', empIds: ids, remarks }); showMsg($('#m-ap'), r.message, true); await loadMonth(); } catch (e) { showMsg($('#m-ap'), e.message); } };
 $('#lockBtn').onclick = async () => {
   const lk = locked(); let reason = '';
-  if (lk) { reason = prompt('Reason for unlocking ' + M.month + ':'); if (!reason) return; }
+  if (lk) { reason = await uiPrompt('Reason for unlocking ' + M.month + ':', { required: true }); if (!reason) return; }
   else { const pending = M.employees.length - M.employees.filter(e => statusOf(e.EmpId) === 'Approved').length;
-    if (!confirm(`Lock ${M.month}?` + (pending ? `\n${pending} employees are not approved yet and will stay unapproved.` : '') + '\nNo one can change figures after locking.')) return; }
-  try { await api('setKpiCycle', { month: M.month, status: lk ? 'Open' : 'Locked', reason }); await loadMonth(); } catch (e) { alert(e.message); }
+    if (!await uiConfirm(`Lock ${M.month}?` + (pending ? `\n${pending} employees are not approved yet and will stay unapproved.` : '') + '\nNo one can change figures after locking.')) return; }
+  try { await api('setKpiCycle', { month: M.month, status: lk ? 'Open' : 'Locked', reason }); await loadMonth(); } catch (e) { uiAlert(e.message); }
 };
 
 // ───── Reports ─────
@@ -376,7 +376,7 @@ function bars(el, items, max) {
   $(el).innerHTML = items.map(([l, v, cls, note]) => `<div class="bar"><span title="${esc(l)}" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(l)}</span><div class="tr"><div class="fl ${cls || ''}" style="width:${Math.min(100, v / max * 100)}%"></div></div><b>${esc(note ?? v)}</b></div>`).join('') || '<p class="sub">No data.</p>';
 }
 async function loadReport() {
-  try { R = await api('getKpiReport', { from: $('#rFrom').value, to: $('#rTo').value, include: $('#rInc').value }); } catch (e) { return alert(e.message); }
+  try { R = await api('getKpiReport', { from: $('#rFrom').value, to: $('#rTo').value, include: $('#rInc').value }); } catch (e) { return uiAlert(e.message); }
   const stores = [...new Set(R.employees.map(e => e.StoreCode))].sort(), keep = $('#rStore').value;
   $('#rStore').innerHTML = '<option value="">All</option>' + stores.map(s => `<option>${esc(s)}</option>`).join(''); $('#rStore').value = keep;
   drawReport();
@@ -409,14 +409,14 @@ function drawReport() {
 }
 async function loadTrend(id) {
   if (!id) return $('#rTrend').innerHTML = '';
-  let T; try { T = await api('getKpiReport', { from: $('#rFrom').value, to: $('#rTo').value, include: $('#rInc').value, empId: id }); } catch (e) { return alert(e.message); }
+  let T; try { T = await api('getKpiReport', { from: $('#rFrom').value, to: $('#rTo').value, include: $('#rInc').value, empId: id }); } catch (e) { return uiAlert(e.message); }
   const sm = T.summaries.filter(s => s.EmpId === id && s.TotalScore !== '').sort((a, b) => a.Month < b.Month ? -1 : 1);
   if (!sm.length) return $('#rTrend').innerHTML = '<p class="sub">No scores in this range.</p>';
   const W = 640, H = 200, P = 32, max = Math.max(120, ...sm.map(s => +s.TotalScore));
   const x = i => P + (sm.length === 1 ? (W - 2 * P) / 2 : i * (W - 2 * P) / (sm.length - 1)), y = v => H - P - v / max * (H - 2 * P);
   const pts = sm.map((s, i) => `${x(i)},${y(+s.TotalScore)}`).join(' ');
-  const grid = [0, 60, 75, 90].map(v => `<line x1="${P}" x2="${W - P}" y1="${y(v)}" y2="${y(v)}" stroke="#e3e6eb"/><text x="4" y="${y(v) + 4}" font-size="10" fill="#6b7280">${v}</text>`).join('');
-  const svg = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:${W}px">${grid}<polyline points="${pts}" fill="none" stroke="#2f5597" stroke-width="2.5"/>${sm.map((s, i) => `<circle cx="${x(i)}" cy="${y(+s.TotalScore)}" r="4" fill="#2f5597"/><text x="${x(i)}" y="${y(+s.TotalScore) - 9}" font-size="11" text-anchor="middle" fill="#1c2230">${s.TotalScore} ${s.Band}</text><text x="${x(i)}" y="${H - 10}" font-size="10" text-anchor="middle" fill="#6b7280">${s.Month}</text>`).join('')}</svg>`;
+  const grid = [0, 60, 75, 90].map(v => `<line x1="${P}" x2="${W - P}" y1="${y(v)}" y2="${y(v)}" stroke="#e7e3d8"/><text x="4" y="${y(v) + 4}" font-size="10" fill="#646767">${v}</text>`).join('');
+  const svg = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:${W}px">${grid}<polyline points="${pts}" fill="none" stroke="#f2ac3c" stroke-width="2.5"/>${sm.map((s, i) => `<circle cx="${x(i)}" cy="${y(+s.TotalScore)}" r="4" fill="#2f5597"/><text x="${x(i)}" y="${y(+s.TotalScore) - 9}" font-size="11" text-anchor="middle" fill="#1c2230">${s.TotalScore} ${s.Band}</text><text x="${x(i)}" y="${H - 10}" font-size="10" text-anchor="middle" fill="#646767">${s.Month}</text>`).join('')}</svg>`;
   const last = sm[sm.length - 1].Month;
   const det = T.entries.filter(e => e.Month === last);
   $('#rTrend').innerHTML = svg + `<h3 style="font-size:14px;margin:12px 0 6px">KPI detail — ${esc(last)}</h3><div class="tbl-wrap"><table><thead><tr><th>KPI</th><th>Target</th><th>Actual</th><th>Achievement</th><th>Weight</th><th>Score</th></tr></thead><tbody>${det.map(e => `<tr><td>${esc(e.KpiName)}</td><td>${esc(e.Target)}</td><td>${esc(e.Actual)}</td><td>${esc(e.AchievementPct)}%</td><td>${esc(e.WeightPct)}%</td><td>${esc(e.Score)}</td></tr>`).join('')}</tbody></table></div>`;
@@ -430,5 +430,5 @@ $('#rExport').onclick = () => {
   XLSX.writeFile(wb, `KPI_Summary_${R.from}_to_${R.to}.xlsx`);
 };
 
-if (S) load().catch(e => alert(e.message));
+if (S) load().catch(e => uiAlert(e.message));
 </script></body></html>

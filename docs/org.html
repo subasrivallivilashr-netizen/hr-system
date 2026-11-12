@@ -127,5 +127,5 @@ $('#q').addEventListener('input', draw);
 $('#expand').onclick = () => { collapsed.clear(); draw(); };
 $('#collapse').onclick = () => { D.positions.forEach(p => collapsed.add(p.PositionCode)); draw(); };
 
-if (S) load().catch(e => alert(e.message));
+if (S) load().catch(e => uiAlert(e.message));
 </script></body></html>

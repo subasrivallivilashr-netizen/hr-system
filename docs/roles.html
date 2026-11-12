@@ -130,10 +130,10 @@ $('#file').onchange = async () => {
   const wb = XLSX.read(await f.arrayBuffer());
   const summaries = readSheet(wb, 'Role Summary', SUM, 'position code').filter(s => SUM.slice(1).some(([k]) => s[k]));
   const duties = readSheet(wb, 'Role Responsibilities', DUT, 'position code').filter(d => d.Responsibility);
-  if (!summaries.length && !duties.length) return alert('No filled rows found. Use the downloaded template.');
-  if (!confirm(`Import ${summaries.length} role summaries and ${duties.length} duties?`)) return;
-  try { const r = await api('importRoles', { summaries, duties }); alert(r.message); await load(); } catch (e) { alert(e.message); }
+  if (!summaries.length && !duties.length) return uiAlert('No filled rows found. Use the downloaded template.');
+  if (!await uiConfirm(`Import ${summaries.length} role summaries and ${duties.length} duties?`)) return;
+  try { const r = await api('importRoles', { summaries, duties }); uiAlert(r.message); await load(); } catch (e) { uiAlert(e.message); }
 };
 window.addEventListener('hashchange', () => { const h = location.hash.slice(1); if (D && pos(h)) show(h); });
-if (S) load().catch(e => alert(e.message));
+if (S) load().catch(e => uiAlert(e.message));
 </script></body></html>

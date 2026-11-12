@@ -139,12 +139,12 @@ $('#file').onchange = async () => {
   const f = $('#file').files[0]; if (!f) return; $('#file').value = '';
   const wb = XLSX.read(await f.arrayBuffer());
   const aoa = XLSX.utils.sheet_to_json(wb.Sheets['Policies'] || wb.Sheets[wb.SheetNames[0]], { header: 1, raw: false, defval: '' });
-  const h = aoa.findIndex(r => r.some(c => String(c).trim().toLowerCase() === 'title')); if (h < 0) return alert('Could not find a "Title" column. Use the template.');
+  const h = aoa.findIndex(r => r.some(c => String(c).trim().toLowerCase() === 'title')); if (h < 0) return uiAlert('Could not find a "Title" column. Use the template.');
   const head = aoa[h].map(x => String(x).trim().toLowerCase()), idx = COLS.map(([k, l]) => [k, head.indexOf(l.toLowerCase())]);
   const rows = aoa.slice(h + 1).map(r => { const o = {}; idx.forEach(([k, i]) => o[k] = i >= 0 ? String(r[i]) : ''); return o; }).filter(o => o.Title.trim());
-  if (!confirm(`Import ${rows.length} policies?`)) return;
-  try { const r = await api('importPolicies', { rows }); alert(r.message); await load(); } catch (e) { alert(e.message); }
+  if (!await uiConfirm(`Import ${rows.length} policies?`)) return;
+  try { const r = await api('importPolicies', { rows }); uiAlert(r.message); await load(); } catch (e) { uiAlert(e.message); }
 };
 window.addEventListener('hashchange', () => { const h = decodeURIComponent(location.hash.slice(1)); if (D && pol(h)) show(h); });
-if (S) load().catch(e => alert(e.message));
+if (S) load().catch(e => uiAlert(e.message));
 </script></body></html>

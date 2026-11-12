@@ -95,13 +95,42 @@ function askReason({ title, intro = '', list, reasonLabel = 'Reason', noteLabel 
   });
 }
 
+// ── In-app dialogs (instead of the browser's alert / confirm / prompt) ──
+function uiDialog({ title = '', message = '', input = false, def = '', required = false, okText = 'OK', cancelText = '', danger = false, choices = null }) {
+  const opener = LAST_BTN;                         // the button that led here keeps the busy lock afterwards
+  return new Promise(resolve => {
+    const d = document.createElement('dialog'); d.className = 'ui-dlg';
+    d.innerHTML = `<form method="dialog">${title ? `<h3>${esc(title)}</h3>` : ''}<p class="ui-msg">${esc(message)}</p>
+      ${input ? `<textarea id="uiIn" rows="2">${esc(def)}</textarea>` : ''}<div class="msg" id="uiM"></div>
+      <div class="row-end">${cancelText ? `<button value="cancel" formnovalidate>${esc(cancelText)}</button>` : ''}
+      ${choices ? choices.map((c, i) => `<button class="btn" value="c${i}">${esc(c)}</button>`).join('') : `<button class="btn ${danger ? 'btn-err' : ''}" value="ok" id="uiOk">${esc(okText)}</button>`}</div></form>`;
+    document.body.appendChild(d);
+    const ok = d.querySelector('#uiOk'), inp = d.querySelector('#uiIn');
+    if (ok && input && required) ok.addEventListener('click', e => { if (!inp.value.trim()) { e.preventDefault(); showMsg(d.querySelector('#uiM'), 'Please type something'); inp.focus(); } });
+    d.addEventListener('close', () => {
+      const v = d.returnValue, val = inp ? inp.value.trim() : '';
+      d.remove();
+      if (opener && v && v !== 'cancel') LAST_BTN = { b: opener.b, t: Date.now() };
+      resolve({ v, val });
+    });
+    d.showModal(); (inp || ok || d.querySelector('button.btn')).focus();
+  });
+}
+const uiAlert = (message, title) => uiDialog({ message: String(message ?? ''), title }).then(() => {});
+const uiConfirm = (message, opt = {}) => uiDialog({ message, cancelText: opt.cancelText || 'Cancel', okText: opt.okText || 'Yes, continue', danger: opt.danger, title: opt.title }).then(r => r.v === 'ok');
+// Resolves to the typed text, or null when cancelled. opt may be a default text or { def, required, okText, title }
+const uiPrompt = (message, opt = {}) => { if (typeof opt === 'string') opt = { def: opt };
+  return uiDialog({ message, input: true, def: opt.def || '', required: !!opt.required, cancelText: 'Cancel', okText: opt.okText || 'OK', title: opt.title }).then(r => r.v === 'ok' ? r.val : null); };
+// Resolves to the index of the chosen button, or null when cancelled
+const uiChoose = (message, choices, title) => uiDialog({ message, choices, cancelText: 'Cancel', title }).then(r => /^c\d+$/.test(r.v) ? Number(r.v.slice(1)) : null);
+
 const CREDIT_HTML = '<span class="credit">Powered by <i></i><b>C&amp;B</b></span>';
 
 // mods: module key or list (any one enabled is enough) — see Settings → Modules
 function guard(roles, mods) {
   const s = Session.get();
   if (!s) { location.href = 'index.html'; return null; }
-  if (roles && !roles.includes(s.role)) { alert('You do not have access to this page.'); location.href = 'index.html'; return null; }
+  if (roles && !roles.includes(s.role)) { uiAlert('You do not have access to this page.').then(() => location.href = 'org.html'); return null; }
   if (mods && !hasMod(mods)) { moduleOffPage(); return null; }
   return s;
 }
@@ -144,16 +173,25 @@ const lifecycleLabel = () => hasMod('ONBOARDING') && hasMod('EXIT') ? 'Onboardin
 function renderTop(active, companyName) {
   const s = Session.get(); if (!s) return;
   const lbl = i => i.key === 'lifecycle' ? lifecycleLabel() : i.key === 'settings' && s.role !== 'SuperAdmin' ? 'Users' : i.label;
-  const html = NAV.map((g, gi) => {
-    if (!g.items) return g.roles.includes(s.role) ? `<a href="${g.href}" class="nl ${g.key === active ? 'on' : ''}">${lbl(g)}</a>` : '';
+  const link = i => `<a href="${i.href}" class="nl ${i.key === active ? 'on' : ''}" ${i.key === active ? 'aria-current="page"' : ''}>${lbl(i)}</a>`;
+  const html = NAV.map(g => {
+    if (!g.items) return g.roles.includes(s.role) ? `<div class="sb-g">Admin</div>${link(g)}` : '';
     const items = g.items.filter(i => i.roles.includes(s.role) && (!i.mod || hasMod(i.mod))); if (!items.length) return '';
-    const on = items.some(i => i.key === active);
-    return `<div class="ng"><button type="button" class="nl ${on ? 'on' : ''}" data-g="${gi}" aria-haspopup="true" aria-expanded="false">${g.label} <span class="car">▾</span></button>
-      <div class="dd">${items.map(i => `<a href="${i.href}" class="${i.key === active ? 'on' : ''}">${lbl(i)}</a>`).join('')}</div></div>`;
+    return `<div class="sb-g">${g.label}</div>${items.map(link).join('')}`;
   }).join('');
-  $('#top').innerHTML = `<b id="co">${esc(companyName || s.company || 'HR System')}</b><nav class="nav">${html}</nav>
-    <span class="who">${esc(s.name)} · ${esc(s.role)}</span><button id="out">Sign out</button>`;
+  const name = esc(companyName || s.company || 'HR System');
+  $('#top').innerHTML = `<div class="sb-brand"><i></i><b id="co">${name}</b></div><nav class="nav" aria-label="Main menu">${html}</nav>
+    <div class="sb-foot"><div class="sb-user">${esc(s.name)}<span>${esc(s.role === 'SuperAdmin' ? 'C&B Super Admin' : s.role)}</span></div><button id="out">Sign out</button>${CREDIT_HTML}</div>`;
+  document.body.classList.add('has-side');
   $('#out').onclick = () => { Session.clear(); location.href = 'index.html'; };
+  if (!$('#mtop')) {                                // phone: top strip with a menu button that slides the sidebar in
+    const m = document.createElement('div'); m.id = 'mtop'; m.className = 'mtop noprint';
+    m.innerHTML = `<button type="button" id="sbToggle" aria-label="Menu">☰</button><i></i><span id="co2">${name}</span>`;
+    document.body.prepend(m);
+    $('#sbToggle').onclick = e => { e.stopPropagation(); document.body.classList.toggle('sb-open'); };
+    document.addEventListener('click', e => { if (document.body.classList.contains('sb-open') && !e.target.closest('#top')) document.body.classList.remove('sb-open'); });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') document.body.classList.remove('sb-open'); });
+  }
   if (!renderTop.checked) {                         // pick up module changes made by C&B since login (once per page)
     renderTop.checked = true;
     api('me').then(m => { const cur = Session.get(); if (!cur || !m.modules) return;
@@ -162,16 +200,8 @@ function renderTop(active, companyName) {
       if (changed) location.reload();
     }).catch(() => {});
   }
-  if (!$('#appFoot')) { const f = document.createElement('footer'); f.id = 'appFoot'; f.className = 'app-foot noprint'; f.innerHTML = CREDIT_HTML; document.body.appendChild(f); }
-  const closeAll = except => document.querySelectorAll('.ng.open').forEach(n => { if (n !== except) { n.classList.remove('open'); n.querySelector('.nl').setAttribute('aria-expanded', 'false'); } });
-  document.querySelectorAll('.ng > .nl').forEach(b => b.onclick = e => {
-    e.stopPropagation(); const g = b.parentElement; closeAll(g);
-    const open = g.classList.toggle('open'); b.setAttribute('aria-expanded', open);
-  });
-  document.addEventListener('click', () => closeAll());
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeAll(); });
 }
-function setCompanyName(n) { const s = Session.get(); if (s && n) { s.company = n; Session.set(s); const el = $('#co'); if (el) el.textContent = n; } }
+function setCompanyName(n) { const s = Session.get(); if (s && n) { s.company = n; Session.set(s); const el = $('#co'); if (el) el.textContent = n; const e2 = $('#co2'); if (e2) e2.textContent = n; } }
 
 // ── Auto-update: when version.json changes, refresh the browser's copy of every page & asset once, then reload ──
 (async function autoUpdate() {

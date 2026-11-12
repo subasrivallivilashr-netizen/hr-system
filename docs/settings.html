@@ -250,7 +250,7 @@ const stSave = async (newSecret) => {
   catch (e) { showMsg($('#m-st'), e.message); }
 };
 $('#stSave').onclick = () => stSave(false);
-$('#stNew').onclick = () => { if (confirm('Create a new secret? Uploads stop until you paste it into Upload.gs and deploy a new version.')) stSave(true); };
+$('#stNew').onclick = async () => { if (await uiConfirm('Create a new secret? Uploads stop until you paste it into Upload.gs and deploy a new version.')) stSave(true); };
 $('#stTest').onclick = async () => { showMsg($('#m-st'), 'Testing…', true); try { showMsg($('#m-st'), (await api('testStorage')).message, true); } catch (e) { showMsg($('#m-st'), e.message); } };
 $('#stClean').onclick = async () => { try { showMsg($('#m-st'), (await api('runFileCleanup')).message, true); } catch (e) { showMsg($('#m-st'), e.message); } };
 $('#stCopy').onclick = () => { navigator.clipboard.writeText($('#stSecret').value); showMsg($('#m-st'), 'Secret copied', true); };
@@ -280,7 +280,7 @@ function drawFQ() {
   const mv = (i, d) => { syncFQ(); const [x] = FQ.splice(i, 1); FQ.splice(i + d, 0, x); drawFQ(); };
   document.querySelectorAll('[data-up]').forEach(b => b.onclick = () => mv(+b.dataset.up, -1));
   document.querySelectorAll('[data-dn]').forEach(b => b.onclick = () => mv(+b.dataset.dn, 1));
-  document.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => { syncFQ(); if (confirm('Remove this question? Answers already given stay in the sheet.')) { FQ.splice(+b.dataset.rm, 1); drawFQ(); } });
+  document.querySelectorAll('[data-rm]').forEach(b => b.onclick = async () => { syncFQ(); if (await uiConfirm('Remove this question? Answers already given stay in the sheet.')) { FQ.splice(+b.dataset.rm, 1); drawFQ(); } });
   document.querySelectorAll('.qT, .qX').forEach(x => x.onchange = () => { syncFQ(); drawFQ(); });
 }
 $('#fqAdd').onclick = () => { syncFQ(); FQ.push({ Code: '', Label: '', Section: FQ.length ? FQ[FQ.length - 1].Section : 'A few questions', Type: 'Text', Options: '', Hint: '', Setting: 'Optional', System: 'No' }); drawFQ(); $('#fqBody tr:last-child .qL').focus(); };
@@ -317,7 +317,7 @@ $('#modSave').onclick = async () => {
 };
 
 if (S) {
-  load().catch(e => alert(e.message));
+  load().catch(e => uiAlert(e.message));
   if (isSA) { loadModules().catch(e => showMsg($('#m-mod'), e.message)); if (hasMod('HIRING')) loadFormSetup().catch(e => showMsg($('#m-fq'), e.message)); if (hasMod('FILES')) loadFiles().catch(e => showMsg($('#m-st'), e.message)); }
 }
 </script></body></html>

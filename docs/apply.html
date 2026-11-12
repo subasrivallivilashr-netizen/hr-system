@@ -73,10 +73,10 @@ $('#f').addEventListener('submit', async e => {
     b.textContent = files.length ? 'Uploading…' : 'Submitting…';
     let r = byHR ? await api('addCandidate', { candidate: o, files }) : await api('applyCandidate', { candidate: o, website, files });
     if (r.needConfirm) {
-      if (!confirm('These mandatory items are missing:\n• ' + r.missing.join('\n• ') + '\n\nSave anyway? The candidate will be marked "Incomplete" so you can fill them in later.')) throw new Error('Not saved. Fill in the missing items, or save anyway.');
+      if (!await uiConfirm('These mandatory items are missing:\n• ' + r.missing.join('\n• ') + '\n\nSave anyway? The candidate will be marked "Incomplete" so you can fill them in later.', { okText: 'Save anyway', title: 'Some items are missing' })) throw new Error('Not saved. Fill in the missing items, or save anyway.');
       r = await api('addCandidate', { candidate: o, files, allowIncomplete: true });
     }
-    if (r.fileNote) alert(r.fileNote);
+    if (r.fileNote) uiAlert(r.fileNote);
     $('#appNo').textContent = r.appNo || 'Received';
     f.classList.add('hidden'); $('#done').classList.remove('hidden'); window.scrollTo(0, 0);
   } catch (err) { showMsg($('#m'), err.message); }

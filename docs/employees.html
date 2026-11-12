@@ -145,7 +145,7 @@ $('#sEmp').onclick = async ev => {
   o.EmploymentType = listValue('eType');
   if (!$('#reasonBox').classList.contains('hidden') && !listValue('reason')) return showMsg($('#m-emp'), 'Choose the reason for the change');
   const b = $('#sEmp'); b.disabled = true;
-  try { const r = await api('saveEmployee', { employee: o, reason: listValue('reason') }); $('#dEmp').close(); await load(); if (!editing) alert('Saved as ' + r.empId); }
+  try { const r = await api('saveEmployee', { employee: o, reason: listValue('reason') }); $('#dEmp').close(); await load(); if (!editing) uiAlert('Saved as ' + r.empId); }
   catch (err) { showMsg($('#m-emp'), err.message); }
   b.disabled = false;
 };
@@ -169,7 +169,7 @@ $('#file').onchange = async () => {
   const ws = wb.Sheets['Employees'] || wb.Sheets[wb.SheetNames[0]];
   let aoa = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '' });
   const hIdx = aoa.findIndex(r => r.some(c => /full name/i.test(String(c))));
-  if (hIdx < 0) { alert('Could not find a "Full Name" column. Use the import template.'); return; }
+  if (hIdx < 0) { uiAlert('Could not find a "Full Name" column. Use the import template.'); return; }
   const head = aoa[hIdx].map(h => String(h).toLowerCase());
   const map = COLS.map(([k, label]) => [k, head.findIndex(h => h.startsWith(label.toLowerCase().split(' (')[0]))]);
   importRows = aoa.slice(hIdx + 1).filter(r => r.some(c => String(c).trim())).map(r => { const o = {}; map.forEach(([k, i]) => o[k] = i >= 0 ? r[i] : ''); return o; })
@@ -186,5 +186,5 @@ $('#goImp').onclick = async ev => {
 };
 
 if (S && canEdit && hasMod('LETTERS')) api('getLetterSetup').then(r => window.CUSTOM_LETTERS = r.templates.filter(t => t.custom && t.Ref === 'employee')).catch(() => {});
-if (S) load().catch(e => alert(e.message));
+if (S) load().catch(e => uiAlert(e.message));
 </script></body></html>

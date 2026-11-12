@@ -189,7 +189,7 @@ function openCk(recordId) {
   $('#m-k').textContent = '';
   $('#kSave').onclick = () => save(kind, recordId).then(r => r && showMsg($('#m-k'), 'Saved', true));
   $('#kDone').onclick = async () => {
-    if (kind === 'Exit' && !confirm(`Complete the exit of ${rec.EmployeeName}?\nThey will be marked Exited and their login (if any) disabled.`)) return;
+    if (kind === 'Exit' && !await uiConfirm(`Complete the exit of ${rec.EmployeeName}?\nThey will be marked Exited and their login (if any) disabled.`, { okText: 'Complete exit', danger: true })) return;
     const s = await save(kind, recordId); if (!s) return;
     try { const r = await api('completeChecklist', { kind, recordId }); await load(); showMsg($('#m-k'), r.message, true); } catch (e) { showMsg($('#m-k'), e.message); }
   };
@@ -221,5 +221,5 @@ $('#tSave').onclick = async () => {
   try { const r = await api('saveChecklistTemplate', { kind: $('#tKind').value, items }); showMsg($('#m-t'), r.message, true); await load(); } catch (e) { showMsg($('#m-t'), e.message); }
 };
 
-if (S) load().catch(e => alert(e.message));
+if (S) load().catch(e => uiAlert(e.message));
 </script></body></html>

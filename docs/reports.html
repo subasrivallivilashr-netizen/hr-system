@@ -6,7 +6,7 @@
 .rwrap{display:grid;grid-template-columns:250px 1fr;gap:16px;align-items:start}
 .rside{position:sticky;top:12px}.rstage{min-width:0}
 .rbar{display:flex;gap:8px;flex-wrap:wrap;align-items:end;margin-bottom:12px}.rbar>div{min-width:150px}
-.pages{background:#e9ecf1;border-radius:10px;padding:16px;overflow:auto}
+.pages{background:#ece9e1;border-radius:10px;padding:16px;overflow:auto}
 .page.rp{min-height:0;margin-bottom:16px}
 .rp .rh{display:flex;align-items:center;gap:14px;border-bottom:3px solid var(--rc);padding-bottom:8px;margin-bottom:12px}
 .rp .rh img{max-height:46px;max-width:160px}.rp .rh .co{font-weight:700;color:var(--rc);font-size:13pt}.rp .rh .rt{margin-left:auto;text-align:right}
@@ -336,7 +336,7 @@ const build = {
 
 window.addEventListener('hashchange', () => { const h = location.hash.slice(1); if (D && h !== cur && setup[h] && (D.isHR || !REPORTS.find(r => r.k === h).hr)) open(h); });
 $('#xls').onclick = () => {
-  if (!XROWS || !window.XLSX || !XLSX.utils) return alert('Nothing to download for this report.');
+  if (!XROWS || !window.XLSX || !XLSX.utils) return uiAlert('Nothing to download for this report.');
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(XROWS), 'Report');
   XLSX.writeFile(wb, `${(REPORTS.find(r => r.k === cur) || {}).t.replace(/[^A-Za-z0-9]+/g, '_')}_${today()}.xlsx`);
 };

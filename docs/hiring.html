@@ -64,7 +64,7 @@
     <div class="kv" id="cKv"></div>
     <div class="box"><h4>Next step</h4><div id="cAct"></div><div id="cForm"></div><span class="msg" id="m-c"></span></div>
     <div class="box"><h4>Documents</h4><div id="cDocs"></div></div>
-    <div class="box"><h4>Edit details</h4><div class="grid" id="cEdit"></div><div class="row-end" style="margin-top:8px"><button id="cSaveEdit">Save details</button></div></div>
+    <div class="box"><h4>Edit details</h4><div id="cEdit" class="ed"></div><div class="row-end" style="margin-top:8px"><button id="cSaveEdit">Save details</button></div></div>
     <div class="box"><h4>History</h4><ul class="tl" id="cTl"><li>Loading…</li></ul></div>
   </div>
 </div></dialog>
@@ -317,7 +317,7 @@ function openInterview(a) {
     const label = { select: 'Select', probation: 'Select on probation', reject: 'Reject', newRole: 'Move to ' + pName($('#nr').value) }[d];
     let remarks = '', reason = '';
     if (d === 'reject') { const x = await askReason({ title: `Reject ${c.Name}`, list: D.lists.REJECT_REASON, reasonLabel: 'Rejection reason', okText: 'Reject', danger: true }); if (!x) return; reason = x.reason; remarks = x.note; }
-    else { remarks = prompt(`${label} ${c.Name}? Add a remark (optional):`, ''); if (remarks === null) return; }
+    else { remarks = await uiPrompt(`${label} ${c.Name}?\nAdd a remark (optional):`, { okText: label }); if (remarks === null) return; }
     const out = await run(() => api('decideCandidate', { appNo: a, decision: d, remarks, reason, newPosition: d === 'newRole' ? $('#nr').value : '' }), '#m-i');
     if (out && (d === 'select' || d === 'probation')) { $('#dI').close(); openOffer(a); }
     else if (out && d === 'reject') $('#dI').close();
@@ -339,7 +339,7 @@ function drawOffers() {
 $('#offAll').onchange = drawOffers;
 function openOffer(a) {
   curApp = a; const o = offer(a), c = cand(a);
-  if (!o) return alert('No offer record yet.');
+  if (!o) return uiAlert('No offer record yet.');
   $('#oT').textContent = `${c.Name} — ${pName(o.PositionCode)}`;
   $('#oS').innerHTML = `${esc(a)} · ${pill(c.Status)} · offer ${pill(o.Status)}`;
   const closed = ['Joined', 'Declined'].includes(o.Status);
@@ -351,8 +351,8 @@ function openOffer(a) {
   if (o.Status === 'Offer Sent') A.push('<button class="btn btn-ok" data-s="accepted">Candidate accepted</button>');
   if (['Pending', 'Offer Sent'].includes(o.Status)) A.push('<button class="btn-err" data-s="declined">Candidate declined</button>');
   $('#oAct').innerHTML = A.join('');
-  document.querySelectorAll('#oAct [data-s]').forEach(b => b.onclick = () => {
-    if (b.dataset.s === 'declined' && !confirm(`Mark that ${c.Name} declined the offer?`)) return;
+  document.querySelectorAll('#oAct [data-s]').forEach(b => b.onclick = async () => {
+    if (b.dataset.s === 'declined' && !await uiConfirm(`Mark that ${c.Name} declined the offer?`, { okText: 'Yes, declined', danger: true })) return;
     run(() => api('updateOffer', { appNo: a, step: b.dataset.s || null, remarks: $('#oRem').value, changes: { NoticePeriod: $('#oNotice').value, EstDOJ: $('#oDoj').value, Call1Date: $('#oCall').value } }), '#m-o');
   });
   const canJoin = c.Status === 'Offer Accepted';
@@ -374,7 +374,7 @@ function openOffer(a) {
     $('#jGo').onclick = async () => {
       if (!$('#jMgr').value) return showMsg($('#m-o'), 'Choose the reporting manager');
       const r = await run(() => api('markJoined', { appNo: a, joiningDate: $('#jDate').value, storeCode: $('#jStore').value, reportingManagerId: $('#jMgr').value, employmentType: listValue('jType'), empId: $('#jId').value.trim() }), '#m-o');
-      if (r && r.empId) { $('#dO').close(); alert(`${c.Name} joined as ${r.empId}.\nOnboarding has started — see "Onboarding & Exit".`); }
+      if (r && r.empId) { $('#dO').close(); uiAlert(r.message || `${c.Name} joined as ${r.empId}.`, 'Joined'); }
     };
   }
   salaryEditor($('#oSal'), a);
@@ -422,11 +422,11 @@ $('#qFile').onchange = async () => {
   const f = $('#qFile').files[0]; if (!f) return; $('#qFile').value = '';
   const wb = XLSX.read(await f.arrayBuffer());
   const aoa = XLSX.utils.sheet_to_json(wb.Sheets['Questions'] || wb.Sheets[wb.SheetNames[0]], { header: 1, raw: false, defval: '' });
-  const h = aoa.findIndex(r => r.some(c => String(c).trim().toLowerCase() === 'question')); if (h < 0) return alert('Use the template (needs a "Question" column).');
+  const h = aoa.findIndex(r => r.some(c => String(c).trim().toLowerCase() === 'question')); if (h < 0) return uiAlert('Use the template (needs a "Question" column).');
   const head = aoa[h].map(x => String(x).trim().toLowerCase()), idx = QCOLS.map(([k, l]) => [k, head.indexOf(l.toLowerCase())]);
   const rows = aoa.slice(h + 1).map(r => { const o = {}; idx.forEach(([k, i]) => o[k] = i >= 0 ? String(r[i]).trim() : ''); return o; }).filter(o => o.Question);
-  if (!confirm(`Import ${rows.length} questions?`)) return;
-  try { const r = await api('importQuestions', { rows }); alert(r.message); await load(); } catch (e) { alert(e.message); }
+  if (!await uiConfirm(`Import ${rows.length} questions?`)) return;
+  try { const r = await api('importQuestions', { rows }); uiAlert(r.message); await load(); } catch (e) { uiAlert(e.message); }
 };
 
 // ── header buttons ──
@@ -439,5 +439,5 @@ $('#qrBtn').onclick = () => {
 $('#qCopy').onclick = () => { navigator.clipboard.writeText($('#qLink').value); $('#qCopy').textContent = 'Copied'; };
 $('#qClose').onclick = () => $('#dQ').close();
 
-if (S) load().catch(e => alert(e.message));
+if (S) load().catch(e => uiAlert(e.message));
 </script></body></html>

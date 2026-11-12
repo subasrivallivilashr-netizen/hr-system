@@ -42,6 +42,7 @@ const NAV = [
   { key: 'hiring', label: 'Hiring', href: 'hiring.html', roles: ['SuperAdmin', 'Admin', 'HR'] },
   { key: 'lifecycle', label: 'Onboarding & Exit', href: 'lifecycle.html', roles: ['SuperAdmin', 'Admin', 'HR'] },
   { key: 'letters', label: 'Letters', href: 'letters.html', roles: ['SuperAdmin', 'Admin', 'HR'] },
+  { key: 'reports', label: 'Reports', href: 'reports.html', roles: ['SuperAdmin', 'Admin', 'HR', 'Manager'] },
   { key: 'settings', label: 'Settings', href: 'settings.html', roles: ['SuperAdmin', 'Admin'] }
 ];
 function renderTop(active, companyName) {

@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Reports</title><link rel="stylesheet" href="assets/app.css"><style id="lstyle"></style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+.rwrap{display:grid;grid-template-columns:250px 1fr;gap:16px;align-items:start}
+.rside{position:sticky;top:12px}.rstage{min-width:0}
+.rbar{display:flex;gap:8px;flex-wrap:wrap;align-items:end;margin-bottom:12px}.rbar>div{min-width:150px}
+.pages{background:#e9ecf1;border-radius:10px;padding:16px;overflow:auto}
+.page.rp{min-height:0;margin-bottom:16px}
+.rp .rh{display:flex;align-items:center;gap:14px;border-bottom:3px solid var(--rc);padding-bottom:8px;margin-bottom:12px}
+.rp .rh img{max-height:46px;max-width:160px}.rp .rh .co{font-weight:700;color:var(--rc);font-size:13pt}.rp .rh .rt{margin-left:auto;text-align:right}
+.rp .rh .rt b{display:block;font-size:12.5pt;color:var(--rc)}.rp .rh .rt span{font-size:8.5pt;color:#666}
+.rp table.t{width:100%;border-collapse:collapse;font-size:8.8pt;margin:6px 0 12px}.rp table.t th,.rp table.t td{border:1px solid #d5dae3;padding:3px 6px;text-align:left;vertical-align:top}
+.rp table.t th{background:var(--rc);color:#fff;font-weight:600}.rp table.t td.n,.rp table.t th.n{text-align:right}
+.rp table.t tr.sub td{background:#f2f4f8;font-weight:600}.rp table.t tr.tot td{background:#e8edf6;font-weight:700}
+.rp h3{font-size:11pt;margin:12px 0 4px}.rp .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;margin:4px 0 12px}
+.rp .tl{border:1px solid #d5dae3;border-radius:6px;padding:6px 8px}.rp .tl b{display:block;font-size:15pt;color:var(--rc)}.rp .tl span{font-size:8pt;color:#666}
+.rp .hb{display:grid;grid-template-columns:150px 1fr 190px;gap:6px;align-items:center;font-size:9pt;margin:3px 0}.rp .hb .tr{background:#eef1f5;height:12px;border-radius:3px;overflow:hidden}.rp .hb .fl{height:100%;background:var(--rc)}
+.rp .kv2{display:grid;grid-template-columns:repeat(2,1fr);gap:2px 18px;font-size:9.5pt}.rp .kv2 div span{color:#666;display:inline-block;min-width:120px}
+.rp .sig{display:grid;grid-template-columns:repeat(3,1fr);gap:24px;margin-top:40px;font-size:9pt;text-align:center}.rp .sig div{border-top:1px solid #999;padding-top:4px}
+.rp .neg{color:#b42318;font-weight:600}.rp .pos{color:#1a7f4b;font-weight:600}.rp .muted{color:#777}
+.rp .foot{position:static;margin-top:14px}
+@media (max-width:900px){.rwrap{grid-template-columns:1fr}.rside{position:static}.pages{padding:6px}.page.rp{transform-origin:top left}}
+@media print{@page{size:A4;margin:10mm}body{background:#fff}.top,.rside,.rbar,.noprint{display:none!important}main{padding:0;max-width:none}.rwrap{display:block}.pages{background:none;padding:0}
+  .page.rp{box-shadow:none;margin:0;width:auto;padding:0;page-break-after:always}.page.rp:last-child{page-break-after:auto}.rp table.t tr{page-break-inside:avoid}}
+</style></head>
+<body>
+<header class="top" id="top"></header>
+<main style="max-width:1400px">
+  <div class="rwrap">
+    <aside class="card rside"><h2>Reports</h2><ul class="plist" id="rlist"></ul></aside>
+    <section class="rstage">
+      <div class="card noprint" style="padding:14px 16px">
+        <div class="rbar" id="rbar"></div>
+        <div style="display:flex;gap:8px;justify-content:space-between;flex-wrap:wrap;align-items:center"><span class="sub" id="rinfo" style="margin:0"></span>
+          <div style="display:flex;gap:8px"><button id="xls">Download Excel</button><button class="btn" onclick="print()">Print / save PDF</button></div></div>
+      </div>
+      <div class="pages" id="pages"><p class="sub">Loading…</p></div>
+    </section>
+  </div>
+</main>
+<script src="assets/app.js"></script>
+<script src="assets/letter.js"></script>
+<script>
+const S = guard(['SuperAdmin', 'Admin', 'HR', 'Manager']);
+renderTop('reports');
+let D = null, cur = null, XROWS = null, loadedKey = '';
+const REPORTS = [
+  { k: 'headcount', t: 'Headcount & vacancy', hr: true },
+  { k: 'movement', t: 'Joiners & exits', hr: true },
+  { k: 'funnel', t: 'Hiring funnel', hr: true },
+  { k: 'probation', t: 'Probation due', hr: false },
+  { k: 'lifecycle', t: 'Onboarding & exit status', hr: true },
+  { k: 'scorecard', t: 'KPI scorecard', hr: false },
+  { k: 'profile', t: 'Employee profile', hr: false },
+  { k: 'celebrate', t: 'Birthdays & anniversaries', hr: false }
+];
+// ── helpers ──
+const MON = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const ymNow = () => new Date().toISOString().slice(0, 7);
+const ymAdd = (ym, n) => { const d = new Date(ym + '-01T00:00:00'); d.setMonth(d.getMonth() + n); return d.toISOString().slice(0, 7); };
+const ymLabel = ym => MON[Number(ym.slice(5)) - 1].slice(0, 3) + ' ' + ym.slice(0, 4);
+const monthEnd = ym => { const d = new Date(ym + '-01T00:00:00'); d.setMonth(d.getMonth() + 1); d.setDate(0); return d.toISOString().slice(0, 10); };
+const longD = d => { if (!d) return ''; const x = new Date(String(d).slice(0, 10) + 'T00:00:00'); return isNaN(x) ? d : x.getDate() + ' ' + MON[x.getMonth()].slice(0, 3) + ' ' + x.getFullYear(); };
+const days = (a, b) => Math.round((new Date(String(b).slice(0, 10)) - new Date(String(a).slice(0, 10))) / 864e5);
+const today = () => new Date().toISOString().slice(0, 10);
+const P = c => D.positions.find(p => p.PositionCode === c) || {};
+const pN = c => P(c).PositionName || c || '';
+const stN = c => (D.stores.find(s => s.StoreCode === c) || {}).StoreName || c || '';
+const E = id => D.employees.find(e => e.EmpId === id) || {};
+const active = e => e.Status !== 'Exited';
+const pct = (a, b) => b ? Math.round(a / b * 1000) / 10 : 0;
+const avg = a => a.length ? Math.round(a.reduce((x, y) => x + y, 0) / a.length * 10) / 10 : null;
+const tenure = (from, to) => { if (!from) return ''; const a = new Date(from), b = to ? new Date(to) : new Date(); let m = (b.getFullYear() - a.getFullYear()) * 12 + b.getMonth() - a.getMonth(); if (b.getDate() < a.getDate()) m--; m = Math.max(0, m); const y = Math.floor(m / 12); m %= 12; return [y ? y + 'y' : '', m ? m + 'm' : ''].filter(Boolean).join(' ') || '<1m'; };
+const T = (head, rows, opt = {}) => `<table class="t"><thead><tr>${head.map((h, i) => `<th class="${(opt.num || []).includes(i) ? 'n' : ''}">${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.length ? rows.map(r => r.__html || `<tr class="${r.cls || ''}">${(r.cells || r).map((c, i) => `<td class="${(opt.num || []).includes(i) ? 'n' : ''}">${c && c.html !== undefined ? c.html : esc(c ?? '')}</td>`).join('')}</tr>`).join('') : `<tr><td colspan="${head.length}" class="muted">Nothing to show.</td></tr>`}</tbody></table>`;
+const tiles = list => `<div class="tiles">${list.map(([v, l]) => `<div class="tl"><b>${esc(v)}</b><span>${esc(l)}</span></div>`).join('')}</div>`;
+const hbars = (items, max) => { max = max || Math.max(1, ...items.map(i => i[1])); return items.map(([l, v, note]) => `<div class="hb"><span>${esc(l)}</span><div class="tr"><div class="fl" style="width:${Math.min(100, v / max * 100)}%"></div></div><b style="text-align:right">${esc(note ?? v)}</b></div>`).join(''); };
+function page(title, sub, inner) {
+  const b = D.brand;
+  return `<div class="page rp"><div class="rh">${b.BrandLogo ? `<img src="${b.BrandLogo}">` : ''}<div class="co">${esc(D.companyName)}</div><div class="rt"><b>${esc(title)}</b><span>${esc(sub || '')} · generated ${longD(today())}</span></div></div>${inner}${b.BrandFooter ? `<div class="foot">${esc(b.BrandFooter)}</div>` : ''}</div>`;
+}
+function bar(html) { $('#rbar').innerHTML = html; $('#rbar').querySelectorAll('input,select').forEach(i => i.addEventListener('change', draw)); }
+const sel = (id, label, opts, val) => `<div><label>${label}</label><select id="${id}">${opts.map(([v, l]) => `<option value="${esc(v)}" ${String(v) === String(val) ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></div>`;
+const monthIn = (id, label, val) => `<div><label>${label}</label><input type="month" id="${id}" value="${val}"></div>`;
+const storeOpts = () => [['', 'All stores']].concat(D.stores.filter(s => s.Active !== 'No').map(s => [s.StoreCode, s.StoreCode + ' · ' + s.StoreName]));
+const v = id => ($('#' + id) || {}).value || '';
+const kpiOf = (id, ym) => D.kpiSummaries.find(s => s.EmpId === id && s.Month === ym);
+const lastKpis = (id, n) => D.kpiSummaries.filter(s => s.EmpId === id && s.TotalScore !== '').sort((a, b) => a.Month < b.Month ? 1 : -1).slice(0, n);
+
+// ── data ──
+async function ensureData(entriesMonth) {
+  const key = entriesMonth || '';
+  if (D && loadedKey === key) return;
+  $('#pages').innerHTML = '<p class="sub">Loading data…</p>';
+  const em = entriesMonth || ymAdd(ymNow(), -1);
+  D = await api('getReportData', { kpiFrom: ymAdd(em, -11), kpiTo: ymAdd(ymNow(), 1), entriesMonth: em });
+  D.positions = D.positions.filter(p => true); loadedKey = key;
+  document.documentElement.style.setProperty('--rc', D.brand.BrandColor || '#1f3864');
+  $('#lstyle').textContent = letterStyles(D.brand);
+}
+function menu() {
+  const list = REPORTS.filter(r => D.isHR || !r.hr);
+  $('#rlist').innerHTML = list.map(r => `<li data-k="${r.k}" class="${r.k === cur ? 'on' : ''}">${esc(r.t)}</li>`).join('');
+  document.querySelectorAll('#rlist li').forEach(li => li.onclick = () => open(li.dataset.k));
+}
+async function open(k) { cur = k; location.hash = k; menu(); setup[k](); await draw(); }
+async function draw() {
+  try { XROWS = null; const html = await build[cur](); $('#pages').innerHTML = html; $('#xls').disabled = !XROWS; }
+  catch (e) { $('#pages').innerHTML = `<p class="under">${esc(e.message)}</p>`; }
+}
+
+// ── filter bars ──
+const setup = {
+  headcount: () => bar(sel('fStore', 'Store', storeOpts(), '')),
+  movement: () => bar(monthIn('fFrom', 'From', ymAdd(ymNow(), -5)) + monthIn('fTo', 'To', ymNow()) + sel('fStore', 'Store', storeOpts(), '')),
+  funnel: () => bar(monthIn('fFrom', 'Applied from', ymAdd(ymNow(), -5)) + monthIn('fTo', 'To', ymNow()) + sel('fPos', 'Position', [['', 'All positions']].concat(D.positions.filter(p => p.ParentPositionCode).map(p => [p.PositionCode, p.PositionName])), '')),
+  probation: () => bar(sel('fWin', 'Ending within', [[30, '30 days'], [60, '60 days'], [90, '90 days'], [365, 'All on probation']], 30) + sel('fStore', 'Store', storeOpts(), '')),
+  lifecycle: () => bar(sel('fKind', 'Show', [['both', 'Onboarding and exit'], ['Onboarding', 'Onboarding only'], ['Exit', 'Exit only']], 'both')),
+  scorecard: () => bar(monthIn('fMonth', 'Month', ymAdd(ymNow(), -1)) + sel('fStore', 'Store', storeOpts(), '') + sel('fPos', 'Position', [['', 'All positions']].concat(D.positions.map(p => [p.PositionCode, p.PositionName])), '') +
+    sel('fEmp', 'Employee', [['', 'Everyone with a score']].concat(D.employees.filter(active).sort((a, b) => a.FullName.localeCompare(b.FullName)).map(e => [e.EmpId, e.FullName + ' · ' + e.EmpId])), '')),
+  profile: () => bar(sel('fEmp', 'Employee', D.employees.sort((a, b) => a.FullName.localeCompare(b.FullName)).map(e => [e.EmpId, e.FullName + ' · ' + e.EmpId + (e.Status === 'Exited' ? ' (exited)' : '')]), (D.employees.find(active) || {}).EmpId)),
+  celebrate: () => bar(sel('fMon', 'Month', MON.map((m, i) => [i + 1, m]), new Date().getMonth() + 1) + sel('fStore', 'Store', storeOpts(), ''))
+};
+
+// ── reports ──
+const build = {
+  headcount() {
+    const st = v('fStore'), stores = D.stores.filter(s => s.Active !== 'No' && (!st || s.StoreCode === st));
+    const pos = D.positions.filter(p => p.Active !== 'No'), rows = [], X = [['Store', 'Department', 'Position', 'Approved', 'Filled', 'Vacancy']];
+    let gA = 0, gF = 0; const byDept = {};
+    stores.forEach(s => {
+      let sA = 0, sF = 0; const lines = [];
+      pos.forEach(p => {
+        const applies = p.StoreCode === 'ALL' ? s.Type === 'Store' : p.StoreCode === s.StoreCode;
+        const filled = D.employees.filter(e => active(e) && e.PositionCode === p.PositionCode && e.StoreCode === s.StoreCode).length;
+        const approved = applies ? Number(p.ApprovedHeadcount || 0) : 0;
+        if (!approved && !filled) return;
+        lines.push([p.Department || p.Branch || '', p.PositionName, approved, filled, approved - filled]);
+        sA += approved; sF += filled;
+        const d = p.Department || p.Branch || 'Other'; byDept[d] = byDept[d] || [0, 0]; byDept[d][0] += approved; byDept[d][1] += filled;
+      });
+      if (!lines.length) return;
+      rows.push({ cls: 'sub', cells: [`${s.StoreCode} · ${s.StoreName}`, '', sA, sF, { html: vac(sA - sF) }] });
+      lines.sort((a, b) => a[0].localeCompare(b[0])).forEach(l => { rows.push([l[0], l[1], l[2], l[3], { html: vac(l[4]) }]); X.push([s.StoreCode, l[0], l[1], l[2], l[3], l[4]]); });
+      gA += sA; gF += sF;
+    });
+    rows.push({ cls: 'tot', cells: ['Total', '', gA, gF, { html: vac(gA - gF) }] });
+    XROWS = X;
+    $('#rinfo').textContent = 'Approved = headcount set on each position in Organisation. Positions for "All stores" count once per store.';
+    const dept = Object.entries(byDept).sort((a, b) => b[1][0] - a[1][0]);
+    return page('Headcount & vacancy', st ? stN(st) : 'All stores',
+      tiles([[gA, 'Approved positions'], [gF, 'Filled'], [Math.max(0, gA - gF), 'Vacancies'], [pct(gF, gA) + '%', 'Filled']]) +
+      `<h3>By department</h3>` + T(['Department', 'Approved', 'Filled', 'Vacancy', 'Filled %'], dept.map(([d, [a, f]]) => [d, a, f, { html: vac(a - f) }, pct(f, a) + '%']), { num: [1, 2, 3, 4] }) +
+      `<h3>By store and position</h3>` + T(['Store / department', 'Position', 'Approved', 'Filled', 'Vacancy'], rows, { num: [2, 3, 4] }));
+    function vac(n) { return n > 0 ? `<span class="neg">${n}</span>` : n < 0 ? `<span class="pos">+${-n} over</span>` : '0'; }
+  },
+
+  movement() {
+    const from = v('fFrom') || ymAdd(ymNow(), -5), to = v('fTo') || ymNow(), st = v('fStore');
+    if (from > to) throw new Error('"From" is after "To"');
+    const emps = D.employees.filter(e => !st || e.StoreCode === st);
+    const exited = e => e.Status === 'Exited' && e.ExitDate;
+    const hcAt = d => emps.filter(e => e.JoiningDate && e.JoiningDate <= d && !(exited(e) && e.ExitDate < d)).length;
+    const months = []; for (let m = from; m <= to; m = ymAdd(m, 1)) months.push(m);
+    let totLeft = 0, totJoin = 0; const avgHc = [];
+    const mrows = months.map(m => {
+      const start = hcAt(m + '-01'), end = hcAt(monthEnd(m)) - emps.filter(e => exited(e) && e.ExitDate === monthEnd(m)).length;
+      const joined = emps.filter(e => (e.JoiningDate || '').startsWith(m)).length, left = emps.filter(e => exited(e) && e.ExitDate.startsWith(m)).length;
+      totJoin += joined; totLeft += left; avgHc.push((start + end) / 2);
+      return [ymLabel(m), start, joined, left, end, pct(left, (start + end) / 2) + '%'];
+    });
+    const rangeAttr = pct(totLeft, avgHc.reduce((a, b) => a + b, 0) / (avgHc.length || 1));
+    const inR = d => d && d.slice(0, 7) >= from && d.slice(0, 7) <= to;
+    const joiners = emps.filter(e => inR(e.JoiningDate)).sort((a, b) => a.JoiningDate < b.JoiningDate ? -1 : 1);
+    const leavers = emps.filter(e => exited(e) && inR(e.ExitDate)).sort((a, b) => a.ExitDate < b.ExitDate ? -1 : 1);
+    const reasonOf = id => { const r = ((D.exit || {}).records || []).filter(x => x.EmpId === id).sort((a, b) => a.CreatedAt < b.CreatedAt ? 1 : -1)[0]; return r ? r.Reason || '' : ''; };
+    const reasons = {}; leavers.forEach(e => { const r = reasonOf(e.EmpId) || 'Not recorded'; reasons[r] = (reasons[r] || 0) + 1; });
+    const early = leavers.filter(e => days(e.JoiningDate, e.ExitDate) < 90).length;
+    XROWS = [['Type', 'Employee ID', 'Name', 'Position', 'Store', 'Date', 'Reason', 'Tenure']].concat(joiners.map(e => ['Joined', e.EmpId, e.FullName, pN(e.PositionCode), e.StoreCode, e.JoiningDate, '', ''])).concat(leavers.map(e => ['Left', e.EmpId, e.FullName, pN(e.PositionCode), e.StoreCode, e.ExitDate, reasonOf(e.EmpId), tenure(e.JoiningDate, e.ExitDate)]));
+    $('#rinfo').textContent = 'Attrition % = people who left ÷ average headcount. "Left" counts employees whose exit is completed (status Exited).';
+    return page('Joiners & exits', `${ymLabel(from)} – ${ymLabel(to)}${st ? ' · ' + stN(st) : ''}`,
+      tiles([[totJoin, 'Joined'], [totLeft, 'Left'], [rangeAttr + '%', 'Attrition (period)'], [early, 'Left within 90 days']]) +
+      `<h3>Month by month</h3>` + T(['Month', 'Start', 'Joined', 'Left', 'End', 'Attrition'], mrows, { num: [1, 2, 3, 4, 5] }) +
+      `<h3>Why people left</h3>` + (leavers.length ? hbars(Object.entries(reasons).sort((a, b) => b[1] - a[1]).map(([r, n]) => [r, n, `${n} (${pct(n, leavers.length)}%)`]), leavers.length) : '<p class="muted">No exits in this period.</p>') +
+      `<h3>Joiners (${joiners.length})</h3>` + T(['ID', 'Name', 'Position', 'Store', 'Joined'], joiners.map(e => [e.EmpId, e.FullName, pN(e.PositionCode), e.StoreCode, longD(e.JoiningDate)])) +
+      `<h3>Leavers (${leavers.length})</h3>` + T(['ID', 'Name', 'Position', 'Store', 'Last day', 'Tenure', 'Reason'], leavers.map(e => [e.EmpId, e.FullName, pN(e.PositionCode), e.StoreCode, longD(e.ExitDate), tenure(e.JoiningDate, e.ExitDate), reasonOf(e.EmpId)])));
+  },
+
+  funnel() {
+    const from = v('fFrom') || ymAdd(ymNow(), -5), to = v('fTo') || ymNow(), ps = v('fPos');
+    const C = D.candidates.filter(c => c.Date && c.Date.slice(0, 7) >= from && c.Date.slice(0, 7) <= to && (!ps || c.PositionCode === ps));
+    const sch = a => D.schedule.find(s => s.AppNo === a), off = a => D.offers.find(o => o.AppNo === a), rej = a => D.rejected.find(r => r.AppNo === a);
+    const AFTER_SHORT = ['Shortlisted', '1st Call Done', '2nd Call Done', 'Interview Scheduled', 'Interviewed', 'Selected', 'Selected (Probation)', 'Offer Sent', 'Offer Accepted', 'Offer Rejected', 'Joined'];
+    const AFTER_INT = ['Interviewed', 'Selected', 'Selected (Probation)', 'Offer Sent', 'Offer Accepted', 'Offer Rejected', 'Joined'];
+    const st = c => ({ applied: true, shortlisted: !!sch(c.AppNo) || AFTER_SHORT.includes(c.Status), interviewed: AFTER_INT.includes(c.Status) || (rej(c.AppNo) || {}).Stage === 'Post Interview',
+      selected: !!off(c.AppNo), joined: c.Status === 'Joined' });
+    const S2 = C.map(c => ({ c, s: st(c) }));
+    const n = k => S2.filter(x => x.s[k]).length;
+    const stages = [['Applied', 'applied'], ['Shortlisted / contacted', 'shortlisted'], ['Interviewed', 'interviewed'], ['Selected', 'selected'], ['Joined', 'joined']];
+    const funnel = stages.map(([l, k], i) => { const v2 = n(k), prev = i ? n(stages[i - 1][1]) : v2; return [l, v2, `${v2} · ${pct(v2, n('applied'))}%${i ? ` (${pct(v2, prev)}% of previous)` : ''}`]; });
+    const joined = S2.filter(x => x.s.joined).map(x => { const o = off(x.c.AppNo); return o && o.JoiningDate ? days(x.c.Date, o.JoiningDate) : null; }).filter(x => x !== null && x >= 0);
+    const tth = joined.length ? Math.round(joined.reduce((a, b) => a + b, 0) / joined.length) : '—';
+    const group = key => { const g = {}; S2.forEach(x => { const k = key(x.c) || 'Not given'; g[k] = g[k] || { a: 0, i: 0, s: 0, j: 0 }; g[k].a++; if (x.s.interviewed) g[k].i++; if (x.s.selected) g[k].s++; if (x.s.joined) g[k].j++; });
+      return Object.entries(g).sort((a, b) => b[1].a - a[1].a).map(([k, o]) => [k, o.a, o.i, o.s, o.j, pct(o.j, o.a) + '%']); };
+    const declined = S2.filter(x => x.c.Status === 'Offer Rejected').length, open = S2.filter(x => !['Joined', 'Rejected', 'Offer Rejected'].includes(x.c.Status)).length;
+    const rejStage = {}; S2.filter(x => x.c.Status === 'Rejected').forEach(x => { const k = (rej(x.c.AppNo) || {}).Stage || 'Pre Interview'; rejStage[k] = (rejStage[k] || 0) + 1; });
+    XROWS = [['Source', 'Applied', 'Interviewed', 'Selected', 'Joined', 'Join %']].concat(group(c => c.Source));
+    $('#rinfo').textContent = 'Candidates who applied in the period, and how far they have got so far. Time to hire = application date to joining date.';
+    return page('Hiring funnel', `${ymLabel(from)} – ${ymLabel(to)}${ps ? ' · ' + pN(ps) : ''}`,
+      tiles([[n('applied'), 'Applied'], [n('joined'), 'Joined'], [pct(n('joined'), n('applied')) + '%', 'Applied → joined'], [tth + (tth === '—' ? '' : ' days'), 'Average time to hire'], [declined, 'Declined offers'], [open, 'Still in process']]) +
+      `<h3>Funnel</h3>` + hbars(funnel, n('applied') || 1) +
+      `<h3>By source</h3>` + T(['Source', 'Applied', 'Interviewed', 'Selected', 'Joined', 'Join %'], group(c => c.Source), { num: [1, 2, 3, 4, 5] }) +
+      `<h3>By position</h3>` + T(['Position', 'Applied', 'Interviewed', 'Selected', 'Joined', 'Join %'], group(c => pN(c.PositionCode)), { num: [1, 2, 3, 4, 5] }) +
+      `<h3>Rejections</h3>` + T(['Stage', 'Candidates'], Object.entries(rejStage).map(([k, v2]) => [k, v2]), { num: [1] }));
+  },
+
+  probation() {
+    const win = Number(v('fWin') || 30), st = v('fStore'), t0 = today();
+    const list = D.employees.filter(e => e.Status === 'Probation' && e.ProbationEndDate && (!st || e.StoreCode === st) && days(t0, e.ProbationEndDate) <= win)
+      .sort((a, b) => a.ProbationEndDate < b.ProbationEndDate ? -1 : 1);
+    const rows = list.map(e => {
+      const k = lastKpis(e.EmpId, 3), a = avg(k.map(x => Number(x.TotalScore))), left = days(t0, e.ProbationEndDate);
+      const sug = a === null ? 'No KPI yet' : a >= 75 ? 'Confirm' : a >= 60 ? 'Review' : 'Extend';
+      return { e, a, left, sug, k };
+    });
+    XROWS = [['Employee ID', 'Name', 'Position', 'Store', 'Joined', 'Probation ends', 'Days left', 'Last 3 KPI avg', 'Suggested']].concat(rows.map(r => [r.e.EmpId, r.e.FullName, pN(r.e.PositionCode), r.e.StoreCode, r.e.JoiningDate, r.e.ProbationEndDate, r.left, r.a ?? '', r.sug]));
+    $('#rinfo').textContent = 'Suggestion from the average of the last 3 KPI scores: 75+ Confirm, 60–74 Review, below 60 Extend. Final decision is HR\'s.';
+    const letterBtn = (r, t, l) => D.isHR ? `<a class="noprint" href="letter.html?type=${t}&ref=${encodeURIComponent(r.e.EmpId)}" target="_blank">${l}</a>` : '';
+    return page('Probation due', `${win === 365 ? 'Everyone on probation' : 'Ending within ' + win + ' days'}${st ? ' · ' + stN(st) : ''}`,
+      tiles([[rows.length, 'On the list'], [rows.filter(r => r.left < 0).length, 'Already overdue'], [rows.filter(r => r.sug === 'Confirm').length, 'Suggested confirm'], [rows.filter(r => r.sug === 'Extend').length, 'Suggested extend']]) +
+      T(['Employee', 'Position', 'Store', 'Manager', 'Ends', 'Days left', 'KPI (last 3)', 'Suggested'], rows.map(r => [
+        { html: `<b>${esc(r.e.FullName)}</b><br><span class="muted">${esc(r.e.EmpId)}</span>` }, pN(r.e.PositionCode), r.e.StoreCode, E(r.e.ReportingManagerId).FullName || '',
+        longD(r.e.ProbationEndDate), { html: r.left < 0 ? `<span class="neg">${-r.left} overdue</span>` : r.left }, { html: r.k.length ? r.k.map(x => `${esc(x.TotalScore)} ${esc(x.Band)}`).join(' · ') + `<br><b>avg ${r.a}</b>` : '<span class="muted">—</span>' },
+        { html: `<b class="${r.sug === 'Confirm' ? 'pos' : r.sug === 'Extend' ? 'neg' : ''}">${r.sug}</b>` + (D.isHR ? `<div class="noprint" style="font-size:8pt;margin-top:3px">${letterBtn(r, 'confirmation', 'Confirm letter')} · ${letterBtn(r, 'probation_extension', 'Extension')}</div>` : '') }]), { num: [5] }));
+  },
+
+  lifecycle() {
+    const kind = v('fKind') || 'both', out = [], X = [['Type', 'Employee ID', 'Name', 'Position', 'Store', 'Date', 'Done', 'Total', 'Mandatory open', 'Status']];
+    for (const K of ['Onboarding', 'Exit']) {
+      if (kind !== 'both' && kind !== K) continue;
+      const box = K === 'Exit' ? D.exit : D.onboarding;
+      const recs = box.records.filter(r => r.Status !== 'Completed');
+      const rows = recs.map(r => {
+        const items = box.items.filter(i => i.RecordId === r.RecordId), done = items.filter(i => i.Status).length;
+        const mand = items.filter(i => !i.Status && (box.template.find(t => t.ItemId === i.ItemId) || {}).Mandatory !== 'No').length;
+        let status;
+        if (K === 'Exit') { const l = days(today(), r.LastWorkingDay); status = l > 0 ? `${l} days to last day` : l === 0 ? 'Last day today' : `${-l} days past last day`; }
+        else { const d = days(r.JoiningDate || r.CreatedAt, today()); status = d < 0 ? `Joins in ${-d}d` : d <= 3 ? `Day ${d} · On track` : d <= 5 ? `Day ${d} · Due soon` : d <= 7 ? `Day ${d} · Overdue` : `Day ${d} · Critical`; }
+        X.push([K, r.EmpId, r.EmployeeName, pN(r.PositionCode), E(r.EmpId).StoreCode || '', K === 'Exit' ? r.LastWorkingDay : r.JoiningDate, done, items.length, mand, status]);
+        return { r, done, total: items.length, mand, status, late: /Overdue|Critical|past/.test(status) };
+      }).sort((a, b) => b.late - a.late);
+      out.push(`<h3>${K} in progress (${rows.length})</h3>` + T(['Employee', 'Position', 'Store', K === 'Exit' ? 'Last day' : 'Joined', 'Progress', 'Mandatory open', 'Status'], rows.map(x => [
+        { html: `<b>${esc(x.r.EmployeeName)}</b><br><span class="muted">${esc(x.r.EmpId)}</span>` }, pN(x.r.PositionCode), E(x.r.EmpId).StoreCode || '', longD(K === 'Exit' ? x.r.LastWorkingDay : x.r.JoiningDate),
+        `${x.done}/${x.total} (${pct(x.done, x.total)}%)`, { html: x.mand ? `<span class="neg">${x.mand}</span>` : '0' }, { html: x.late ? `<span class="neg">${esc(x.status)}</span>` : esc(x.status) }]), { num: [5] }));
+      out.push(`<p class="muted" style="font-size:8.5pt">${K} completed in the last 30 days: ${box.records.filter(r => r.Status === 'Completed' && r.CompletedAt && days(r.CompletedAt, today()) <= 30).length}</p>`);
+    }
+    XROWS = X; $('#rinfo').textContent = 'Open onboarding and exit checklists. Onboarding target: within 3 days of joining.';
+    return page('Onboarding & exit status', 'Open checklists', out.join(''));
+  },
+
+  async scorecard() {
+    const m = v('fMonth') || ymAdd(ymNow(), -1);
+    await ensureData(m);
+    const st = v('fStore'), ps = v('fPos'), one = v('fEmp');
+    const list = D.kpiSummaries.filter(s => s.Month === m && s.TotalScore !== '').map(s => ({ s, e: E(s.EmpId) }))
+      .filter(x => x.e.EmpId && (!st || x.e.StoreCode === st) && (!ps || x.e.PositionCode === ps) && (!one || x.e.EmpId === one))
+      .sort((a, b) => (a.e.StoreCode + a.e.FullName).localeCompare(b.e.StoreCode + b.e.FullName));
+    XROWS = [['Month', 'Employee ID', 'Name', 'Position', 'Store', 'KPI', 'Target', 'Actual', 'Achievement %', 'Weight %', 'Score', 'Total', 'Band', 'Status']];
+    $('#rinfo').textContent = `${list.length} scorecards for ${ymLabel(m)} (approved or submitted). One page per employee.`;
+    if (!list.length) return page('KPI scorecard', ymLabel(m), '<p class="muted">No KPI scores for this month and filter. Scores appear after the monthly KPI cycle is submitted / approved.</p>');
+    return list.map(({ s, e }) => {
+      const ents = D.kpiEntries.filter(x => x.EmpId === e.EmpId && x.Month === m);
+      const params = D.kpiParams.filter(k => k.PositionCode === e.PositionCode);
+      ents.forEach(x => XROWS.push([m, e.EmpId, e.FullName, pN(e.PositionCode), e.StoreCode, x.KpiName, x.Target, x.Actual, x.AchievementPct, x.WeightPct, x.Score, s.TotalScore, s.Band, s.Status]));
+      const trend = []; for (let i = 5; i >= 0; i--) { const mm = ymAdd(m, -i), k = kpiOf(e.EmpId, mm); trend.push([ymLabel(mm), k && k.TotalScore !== '' ? k.TotalScore : '—', k ? k.Band : '—']); }
+      const band = D.bands.find(b => b.Band === s.Band) || {};
+      return page('KPI scorecard', ymLabel(m) + (s.Status === 'Submitted' ? ' · not yet approved' : ''),
+        `<div class="kv2"><div><span>Name</span><b>${esc(e.FullName)}</b></div><div><span>Employee ID</span>${esc(e.EmpId)}</div><div><span>Position</span>${esc(pN(e.PositionCode))}</div><div><span>Store</span>${esc(stN(e.StoreCode))}</div>
+          <div><span>Reporting manager</span>${esc(E(e.ReportingManagerId).FullName || '')}</div><div><span>Joined</span>${longD(e.JoiningDate)}</div></div>` +
+        tiles([[s.TotalScore, 'Total score'], [s.Band + (band.Meaning ? ' · ' + band.Meaning : ''), 'Rating band'], [s.Status, 'Status']]) +
+        `<h3>KPI detail</h3>` + T(['KPI', 'Target', 'Actual', 'Achievement', 'Weight', 'Score'], ents.map(x => { const pr = params.find(k => k.KpiName === x.KpiName) || {};
+          return [{ html: `${esc(x.KpiName)}${pr.Direction === 'Lower is better' ? ' <span class="muted">(lower is better)</span>' : ''}` }, `${x.Target} ${pr.Unit || ''}`, x.Actual, x.AchievementPct + '%', x.WeightPct + '%', x.Score]; })
+          .concat([{ cls: 'tot', cells: ['Total', '', '', '', '100%', s.TotalScore] }]), { num: [1, 2, 3, 4, 5] }) +
+        `<h3>Last 6 months</h3>` + T(trend.map(t => t[0]), [trend.map(t => t[1]), trend.map(t => t[2])]) +
+        (s.ManagerRemarks ? `<h3>Remarks</h3><p style="font-size:9.5pt">${esc(s.ManagerRemarks)}</p>` : '') +
+        `<div class="sig"><div>Employee</div><div>Reporting manager</div><div>HR</div></div>`);
+    }).join('');
+  },
+
+  profile() {
+    const e = E(v('fEmp')); if (!e.EmpId) return page('Employee profile', '', '<p class="muted">Choose an employee.</p>');
+    const k = lastKpis(e.EmpId, 6).reverse(), tr = D.transfers.filter(t => t.EmpId === e.EmpId).sort((a, b) => a.Date < b.Date ? 1 : -1);
+    const role = D.roles.find(r => r.PositionCode === e.PositionCode) || {}, age = e.DOB ? Math.floor(days(e.DOB, today()) / 365.25) : '';
+    const reports = D.employees.filter(x => x.ReportingManagerId === e.EmpId && active(x)).length;
+    const ob = D.onboarding ? D.onboarding.records.find(r => r.EmpId === e.EmpId) : null, ex = D.exit ? D.exit.records.find(r => r.EmpId === e.EmpId) : null;
+    const lt = (D.letters || []).filter(l => l.Ref === e.EmpId || (e.CandidateAppNo && l.Ref === e.CandidateAppNo));
+    XROWS = [['Field', 'Value'], ['Employee ID', e.EmpId], ['Name', e.FullName], ['Position', pN(e.PositionCode)], ['Store', stN(e.StoreCode)], ['Manager', E(e.ReportingManagerId).FullName || ''], ['Joined', e.JoiningDate], ['Status', e.Status]];
+    $('#rinfo').textContent = 'One-page summary of the employee from all modules.';
+    return page('Employee profile', e.FullName,
+      `<h3>Personal</h3><div class="kv2"><div><span>Name</span><b>${esc(e.FullName)}</b></div><div><span>Employee ID</span>${esc(e.EmpId)}</div><div><span>Gender</span>${esc(e.Gender || '')}</div>
+        <div><span>Date of birth</span>${longD(e.DOB)}${age !== '' ? ` (${age} yrs)` : ''}</div><div><span>Phone</span>${esc(e.Phone || '')}</div><div><span>Email</span>${esc(e.Email || '')}</div></div>
+       <h3>Job</h3><div class="kv2"><div><span>Position</span><b>${esc(pN(e.PositionCode))}</b></div><div><span>Department</span>${esc(P(e.PositionCode).Department || P(e.PositionCode).Branch || '')}</div>
+        <div><span>Store</span>${esc(stN(e.StoreCode))}</div><div><span>Reporting manager</span>${esc(E(e.ReportingManagerId).FullName || '—')}</div><div><span>Direct reports</span>${reports}</div>
+        <div><span>Employment type</span>${esc(e.EmploymentType || '')}</div><div><span>Joined</span>${longD(e.JoiningDate)} (${tenure(e.JoiningDate, e.Status === 'Exited' ? e.ExitDate : '')})</div>
+        <div><span>Status</span><b>${esc(e.Status)}</b>${e.Status === 'Probation' ? ' until ' + longD(e.ProbationEndDate) : e.Status === 'Exited' ? ' on ' + longD(e.ExitDate) : ''}</div>
+        ${e.CandidateAppNo ? `<div><span>Hired from</span>${esc(e.CandidateAppNo)}</div>` : ''}</div>
+       ${role.JobPurpose ? `<h3>Role purpose</h3><p style="font-size:9.5pt;margin:0">${esc(role.JobPurpose)}</p>` : ''}
+       <h3>KPI — last 6 months</h3>` + (k.length ? T(k.map(x => ymLabel(x.Month)), [k.map(x => x.TotalScore), k.map(x => x.Band)]) + `<p style="font-size:9pt">Average: <b>${avg(k.map(x => Number(x.TotalScore)))}</b></p>` : '<p class="muted">No KPI scores yet.</p>') +
+      `<h3>Movement history</h3>` + T(['Date', 'From', 'To', 'Reason'], tr.map(t => [longD(t.Date), `${pN(t.FromPosition)} · ${t.FromStore}`, `${pN(t.ToPosition)} · ${t.ToStore}`, t.Reason || ''])) +
+      (D.isHR ? `<h3>Onboarding / exit</h3><div class="kv2"><div><span>Onboarding</span>${ob ? esc(ob.Status) + (ob.CompletedAt ? ' · ' + longD(ob.CompletedAt) : '') : 'Not started'}</div><div><span>Exit</span>${ex ? esc(ex.Status) + ' · last day ' + longD(ex.LastWorkingDay) + (ex.Reason ? ' · ' + esc(ex.Reason) : '') : '—'}</div></div>
+        <h3>Letters issued</h3>` + T(['Letter no.', 'Letter', 'Issued'], lt.map(l => [l.LetterNo, l.Title, longD(l.IssuedOn)])) : ''));
+  },
+
+  celebrate() {
+    const mo = Number(v('fMon') || new Date().getMonth() + 1), st = v('fStore'), yr = new Date().getFullYear();
+    const emps = D.employees.filter(e => active(e) && (!st || e.StoreCode === st));
+    const bday = emps.filter(e => e.DOB && Number(e.DOB.slice(5, 7)) === mo).sort((a, b) => a.DOB.slice(8) < b.DOB.slice(8) ? -1 : 1);
+    const anniv = emps.filter(e => e.JoiningDate && Number(e.JoiningDate.slice(5, 7)) === mo && yr - Number(e.JoiningDate.slice(0, 4)) >= 1).sort((a, b) => a.JoiningDate.slice(8) < b.JoiningDate.slice(8) ? -1 : 1);
+    XROWS = [['Type', 'Date', 'Employee ID', 'Name', 'Position', 'Store', 'Years']].concat(bday.map(e => ['Birthday', e.DOB.slice(8) + ' ' + MON[mo - 1], e.EmpId, e.FullName, pN(e.PositionCode), e.StoreCode, ''])).concat(anniv.map(e => ['Work anniversary', e.JoiningDate.slice(8) + ' ' + MON[mo - 1], e.EmpId, e.FullName, pN(e.PositionCode), e.StoreCode, yr - Number(e.JoiningDate.slice(0, 4))]));
+    $('#rinfo').textContent = 'Active employees. Work anniversaries from 1 year onwards.';
+    return page('Birthdays & work anniversaries', MON[mo - 1] + (st ? ' · ' + stN(st) : ''),
+      tiles([[bday.length, 'Birthdays'], [anniv.length, 'Work anniversaries']]) +
+      `<h3>Birthdays</h3>` + T(['Date', 'Name', 'Position', 'Store'], bday.map(e => [Number(e.DOB.slice(8)) + ' ' + MON[mo - 1].slice(0, 3), e.FullName, pN(e.PositionCode), stN(e.StoreCode)])) +
+      `<h3>Work anniversaries</h3>` + T(['Date', 'Name', 'Position', 'Store', 'Years'], anniv.map(e => [Number(e.JoiningDate.slice(8)) + ' ' + MON[mo - 1].slice(0, 3), e.FullName, pN(e.PositionCode), stN(e.StoreCode), yr - Number(e.JoiningDate.slice(0, 4))]), { num: [4] }));
+  }
+};
+
+window.addEventListener('hashchange', () => { const h = location.hash.slice(1); if (D && h !== cur && setup[h] && (D.isHR || !REPORTS.find(r => r.k === h).hr)) open(h); });
+$('#xls').onclick = () => {
+  if (!XROWS || !window.XLSX || !XLSX.utils) return alert('Nothing to download for this report.');
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(XROWS), 'Report');
+  XLSX.writeFile(wb, `${(REPORTS.find(r => r.k === cur) || {}).t.replace(/[^A-Za-z0-9]+/g, '_')}_${today()}.xlsx`);
+};
+(async () => {
+  if (!S) return;
+  try { await ensureData(''); menu(); const h = location.hash.slice(1), list = REPORTS.filter(r => D.isHR || !r.hr); open(list.find(r => r.k === h) ? h : list[0].k); }
+  catch (e) { $('#pages').innerHTML = `<p class="under">${esc(e.message)}</p>`; }
+})();
+</script></body></html>

@@ -1619,6 +1619,55 @@ const ACTIONS = {
     }
   },
 
+  // ═════════════ REPORTS ═════════════
+  // One call returns everything the reports page needs. Managers get only their own team and no hiring data.
+  getReportData: {
+    auth: true,
+    fn: async function (p, user) {
+      const isHR = [ROLES.SUPER, ROLES.ADMIN, ROLES.HR].includes(user.r);
+      const company = await this.companyMap();
+      const brand = {}; BRAND_KEYS.forEach(k => brand[k] = company[k] || '');
+      let employees = (await this.read('Organisation', 'Employees')).map(clean);
+      if (!isHR) {
+        if (!user.e) throw new Error('Your login is not linked to an employee. Ask Admin to link it in Settings → Users.');
+        employees = employees.filter(e => e.ReportingManagerId === user.e);
+      }
+      const team = new Set(employees.map(e => e.EmpId));
+      const positions = (await this.read('Organisation', 'Positions')).map(clean);
+      const stores = (await this.read('Settings', 'Stores')).map(clean);
+      const transfers = (await this.read('Organisation', 'TransferHistory')).filter(t => team.has(t.EmpId)).map(clean);
+      const roles = (await this.read('Library', 'Role_Summary')).map(r => ({ PositionCode: r.PositionCode, JobPurpose: r.JobPurpose }));
+      // KPI: summaries for the range, entries for one month
+      const reg = await this.getRegistry();
+      const kFrom = /^\d{4}-\d{2}$/.test(p.kpiFrom || '') ? p.kpiFrom : '0000-00', kTo = /^\d{4}-\d{2}$/.test(p.kpiTo || '') ? p.kpiTo : '9999-99';
+      const kpiSummaries = [], kpiEntries = [];
+      const y1 = Math.max(Number(kFrom.slice(0, 4)), new Date().getFullYear() - 2), y2 = Math.min(Number(kTo.slice(0, 4)), new Date().getFullYear() + 1);
+      for (let y = y1; y <= y2; y++) {
+        if (!reg['KPI_' + y]) continue;
+        (await this.read('KPI_' + y, 'KPI_Summary')).forEach(r => { if (r.Month >= kFrom && r.Month <= kTo && team.has(r.EmpId) && ['Approved', 'Submitted'].includes(r.Status)) kpiSummaries.push(clean(r)); });
+        if (p.entriesMonth && p.entriesMonth.startsWith(String(y)))
+          (await this.read('KPI_' + y, 'KPI_Entries')).forEach(r => { if (r.Month === p.entriesMonth && team.has(r.EmpId)) kpiEntries.push(clean(r)); });
+      }
+      const kpiParams = (await this.read('Performance', 'KPI_Parameters')).map(clean).filter(k => k.Active !== 'No');
+      let bands = (await this.read('Performance', 'Rating_Bands')).map(clean); if (!bands.length) bands = DEFAULT_BANDS;
+      const out = { brand, companyName: company.CompanyName || '', isHR, employees, positions, stores, transfers, roles, kpiSummaries, kpiEntries, kpiParams, bands };
+      if (isHR) {
+        const H = t => this.read('Hiring', t).then(r => r.map(clean));
+        out.candidates = (await H('Candidates')).map(c => ({ AppNo: c.AppNo, Name: c.Name, PositionCode: c.PositionCode, Source: c.Source, Status: c.Status, Date: c.Date, StoreCode: c.StoreCode }));
+        out.schedule = (await H('Interview_Schedule')).map(s => ({ AppNo: s.AppNo, Call1Date: s.Call1Date, Call2Date: s.Call2Date, InterviewDate: s.InterviewDate }));
+        out.offers = (await H('Selection_Offer')).map(o => ({ AppNo: o.AppNo, Status: o.Status, CreatedAt: o.CreatedAt, JoiningDate: o.JoiningDate }));
+        out.rejected = (await H('Rejected_Candidates')).map(r => ({ AppNo: r.AppNo, Stage: r.Stage }));
+        for (const kind of ['Onboarding', 'Exit']) out[kind.toLowerCase()] = {
+          template: await this.checklistTemplate(kind),
+          records: (await this.read('HR_Ops', kind + '_Records')).map(clean),
+          items: (await this.read('HR_Ops', kind + '_Items')).map(i => ({ RecordId: i.RecordId, ItemId: i.ItemId, Status: i.Status }))
+        };
+        try { await this.letterTabs(); out.letters = (await this.read('Library', 'Letters_Issued')).map(l => ({ LetterNo: l.LetterNo, Ref: l.Ref, Title: l.Title, IssuedOn: l.IssuedOn })); } catch (e) { out.letters = []; }
+      }
+      return out;
+    }
+  },
+
   changeMyPassword: {
     auth: true, write: true,
     fn: async function (p, user) {

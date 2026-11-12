@@ -246,7 +246,7 @@ const build = {
     for (const K of ['Onboarding', 'Exit']) {
       if (kind !== 'both' && kind !== K) continue;
       const box = K === 'Exit' ? D.exit : D.onboarding;
-      const recs = box.records.filter(r => r.Status !== 'Completed');
+      const recs = box.records.filter(r => !['Completed', 'Cancelled'].includes(r.Status));
       const rows = recs.map(r => {
         const items = box.items.filter(i => i.RecordId === r.RecordId), done = items.filter(i => i.Status).length;
         const mand = items.filter(i => !i.Status && (box.template.find(t => t.ItemId === i.ItemId) || {}).Mandatory !== 'No').length;

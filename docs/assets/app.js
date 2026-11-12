@@ -75,14 +75,14 @@ document.addEventListener('change', e => {
 });
 
 // ── Small dialog asking for a reason (list + Other) and an optional note ──
-function askReason({ title, list, reasonLabel = 'Reason', noteLabel = 'Remarks (optional)', noteRequired = false, okText = 'Confirm', danger = false }) {
+function askReason({ title, intro = '', list, reasonLabel = 'Reason', noteLabel = 'Remarks (optional)', noteRequired = false, okText = 'Confirm', danger = false }) {
   const opener = LAST_BTN;                         // keep the button that opened this dialog, so it gets the busy lock
   return new Promise(resolve => {
     const d = document.createElement('dialog');
-    d.innerHTML = `<form method="dialog" style="min-width:min(420px,86vw)"><h3 style="margin-top:0">${esc(title)}</h3>
+    d.innerHTML = `<form method="dialog" style="min-width:min(420px,86vw)"><h3 style="margin-top:0">${esc(title)}</h3>${intro ? `<p class="sub" style="margin-top:-4px">${esc(intro)}</p>` : ''}
       ${list ? `<label>${esc(reasonLabel)}</label>${listSelect('arR', list, '', { blank: '— Select —' })}` : ''}
       <label>${esc(noteLabel)}</label><textarea id="arN" rows="2"></textarea>
-      <div class="row-end"><span class="msg" id="arM"></span><button value="cancel" formnovalidate>Cancel</button><button class="btn ${danger ? 'btn-err' : ''}" value="ok" id="arOk">${esc(okText)}</button></div></form>`;
+      <div class="row-end"><span class="msg" id="arM"></span><button value="cancel" formnovalidate>Go back</button><button class="btn ${danger ? 'btn-err' : ''}" value="ok" id="arOk">${esc(okText)}</button></div></form>`;
     document.body.appendChild(d);
     d.querySelector('#arOk').onclick = e => {
       const reason = list ? listValue('arR') : '', note = d.querySelector('#arN').value.trim();

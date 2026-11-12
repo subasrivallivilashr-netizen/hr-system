@@ -14,7 +14,7 @@
     <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:start">
       <div><h2 id="lTitle"></h2><p class="sub" id="lSub"></p></div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-        <label style="font-weight:400;margin:0"><input type="checkbox" id="showDone" style="width:auto"> Show completed</label>
+        <label style="font-weight:400;margin:0"><input type="checkbox" id="showDone" style="width:auto"> Show completed / cancelled</label>
         <button class="btn" id="startBtn"></button>
       </div>
     </div>
@@ -42,7 +42,7 @@
 <dialog id="dCk" class="wide"><div style="padding:20px">
   <div style="display:flex;justify-content:space-between;gap:8px;align-items:start"><div><h3 id="kT" style="margin:0"></h3><p class="sub" id="kS" style="margin:4px 0 0"></p></div><button id="kClose">Close</button></div>
   <div class="dlg-body" id="kBody"></div>
-  <div class="row-end"><span class="msg" id="m-k"></span><button id="kSave">Save progress</button><button class="btn btn-ok" id="kDone"></button></div>
+  <div class="row-end"><span class="msg" id="m-k"></span><button class="btn-err" id="kCancel" style="margin-right:auto"></button><button id="kSave">Save progress</button><button class="btn btn-ok" id="kDone"></button></div>
 </div></dialog>
 
 <script src="assets/app.js"></script>
@@ -64,8 +64,10 @@ function progress(kind, rec) {
   return { items, done, total: items.length, pct: items.length ? Math.round(done / items.length * 100) : 0 };
 }
 // Onboarding timing: day 0-3 on track, 4-5 due soon, 6-7 overdue, 8+ critical
+const CLOSED_REC = r => ['Completed', 'Cancelled'].includes(r.Status);
 function obTiming(rec, pr) {
   if (rec.Status === 'Completed') return ['Completed', 'yes'];
+  if (rec.Status === 'Cancelled') return ['Cancelled', 'no'];
   const days = Math.floor((Date.now() - new Date(rec.JoiningDate || rec.CreatedAt)) / 864e5);
   if (days < 0) return [`Joins in ${-days}d`, ''];
   if (days <= 3) return [`Day ${days} · On track`, 'yes'];
@@ -75,6 +77,7 @@ function obTiming(rec, pr) {
 }
 function exTiming(rec) {
   if (rec.Status === 'Completed') return ['Completed', 'yes'];
+  if (rec.Status === 'Cancelled') return ['Cancelled', ''];
   const left = Math.ceil((new Date(rec.LastWorkingDay) - Date.now()) / 864e5);
   return left > 0 ? [`${left} days to last day`, ''] : left === 0 ? ['Last day today', 'no'] : [`${-left} days after last day`, 'no'];
 }
@@ -88,7 +91,7 @@ $('#showDone').onchange = () => drawList();
 
 async function load() {
   D = await api('getLifecycle');
-  const open = k => (k === 'Exit' ? D.exit : D.onboarding).records.filter(r => r.Status !== 'Completed').length;
+  const open = k => (k === 'Exit' ? D.exit : D.onboarding).records.filter(r => !CLOSED_REC(r)).length;
   $('#nOb').textContent = open('Onboarding') ? `(${open('Onboarding')})` : ''; $('#nEx').textContent = open('Exit') ? `(${open('Exit')})` : '';
   drawList(); drawTemplate();
   if (cur && $('#dCk').open) openCk(cur);
@@ -100,7 +103,8 @@ function drawList() {
   $('#lSub').textContent = isExit ? 'Completing an exit marks the employee "Exited" and disables their login.' : 'Started automatically when a candidate is marked Joined. Target: complete within 3 days of joining.';
   $('#startBtn').textContent = isExit ? '+ Start exit' : '+ Start onboarding (existing staff)';
   $('#lHead').innerHTML = `<th>Employee</th><th>Position</th><th>Store</th><th>${isExit ? 'Last working day' : 'Joined'}</th><th>Progress</th><th>Status</th>`;
-  const recs = K().records.filter(r => all || r.Status !== 'Completed').sort((a, b) => (a.CreatedAt < b.CreatedAt ? 1 : -1));
+  $('#startBtn').classList.toggle('hidden', !isExit);       // onboarding only starts from Hiring (Mark Joined)
+  const recs = K().records.filter(r => all || !CLOSED_REC(r)).sort((a, b) => (a.CreatedAt < b.CreatedAt ? 1 : -1));
   $('#lRows').innerHTML = recs.map(r => { const pr = progress(tab, r), [lbl, cls] = isExit ? exTiming(r) : obTiming(r, pr);
     return `<tr class="click" data-r="${esc(r.RecordId)}"><td><b>${esc(r.EmployeeName)}</b><div class="sub" style="margin:0;font-size:12px">${esc(r.EmpId)}</div></td><td>${esc(pName(r.PositionCode))}</td><td>${esc(emp(r.EmpId).StoreCode || '')}</td>
       <td>${fmtD(isExit ? r.LastWorkingDay : r.JoiningDate)}</td><td><div style="display:flex;gap:8px;align-items:center"><div class="progress" style="flex:1"><div style="width:${pr.pct}%"></div></div><span style="font-size:12px">${pr.done}/${pr.total}</span></div></td><td><span class="pill ${cls}">${esc(lbl)}</span></td></tr>`; }).join('')
@@ -111,8 +115,8 @@ function drawList() {
 // Start onboarding / exit
 $('#startBtn').onclick = () => {
   const isExit = tab === 'Exit';
-  const busy = new Set(K().records.filter(r => isExit ? r.Status !== 'Completed' : true).map(r => r.EmpId));
-  const list = D.employees.filter(e => e.Status !== 'Exited' && !busy.has(e.EmpId)).sort((a, b) => a.FullName.localeCompare(b.FullName));
+  const busy = new Set(K().records.filter(r => !CLOSED_REC(r)).map(r => r.EmpId));
+  const list = D.employees.filter(e => !['Exited', 'Did not join'].includes(e.Status) && !busy.has(e.EmpId)).sort((a, b) => a.FullName.localeCompare(b.FullName));
   $('#sT').textContent = isExit ? 'Start exit' : 'Start onboarding';
   $('#sEmp').innerHTML = '<option value="">— Select —</option>' + list.map(e => `<option value="${esc(e.EmpId)}">${esc(e.FullName)} · ${esc(e.EmpId)} · ${esc(pName(e.PositionCode))}</option>`).join('');
   $('#exitFields').classList.toggle('hidden', !isExit);
@@ -137,9 +141,9 @@ function openCk(recordId) {
   cur = recordId;
   const kind = recordId.startsWith('EX-') ? 'Exit' : 'Onboarding', box = kind === 'Exit' ? D.exit : D.onboarding;
   const rec = box.records.find(r => r.RecordId === recordId); if (!rec) return;
-  const done = rec.Status === 'Completed', pr = progress(kind, rec), ok = kind === 'Exit' ? 'Done' : 'Yes';
+  const done = CLOSED_REC(rec), pr = progress(kind, rec), ok = kind === 'Exit' ? 'Done' : 'Yes';
   $('#kT').textContent = `${kind}: ${rec.EmployeeName}`;
-  $('#kS').innerHTML = `${esc(rec.EmpId)} · ${esc(pName(rec.PositionCode))} · ${kind === 'Exit' ? 'last working day ' + fmtD(rec.LastWorkingDay) + (rec.Reason ? ' · ' + esc(rec.Reason) : '') : 'joined ' + fmtD(rec.JoiningDate)} · <b id="kPr">${pr.done}/${pr.total}</b>${done ? ' · <span class="pill yes">Completed ' + fmtD(rec.CompletedAt) + '</span>' : ''}`;
+  $('#kS').innerHTML = `${esc(rec.EmpId)} · ${esc(pName(rec.PositionCode))} · ${kind === 'Exit' ? 'last working day ' + fmtD(rec.LastWorkingDay) + (rec.Reason ? ' · ' + esc(rec.Reason) : '') : 'joined ' + fmtD(rec.JoiningDate)} · <b id="kPr">${pr.done}/${pr.total}</b>${rec.Status === 'Completed' ? ' · <span class="pill yes">Completed ' + fmtD(rec.CompletedAt) + '</span>' : ''}${rec.Status === 'Cancelled' ? ` · <span class="pill no">Cancelled ${fmtD(String(rec.CancelledAt || '').slice(0, 10))}</span><br><b>Reason:</b> ${esc(rec.CancelReason || '')} <span class="sub">(by ${esc(rec.CancelledBy || '')})</span>` : ''}`;
   const sections = {};
   pr.items.forEach(i => { const t = box.template.find(x => x.ItemId === i.ItemId) || { Section: 'Other', Item: i.ItemId, Mandatory: 'Yes' }; (sections[t.Section] = sections[t.Section] || []).push([i, t]); });
   $('#kBody').innerHTML = Object.keys(sections).sort((a, b) => (parseInt(a) || 99) - (parseInt(b) || 99)).map(sec => `<div class="box"><h4>${esc(sec)}</h4>${sections[sec].map(([i, t]) => `
@@ -163,7 +167,16 @@ function openCk(recordId) {
     inp.click();
   });
   document.querySelectorAll('.kst').forEach(s => s.onchange = () => { const n = [...document.querySelectorAll('.kst')].filter(x => x.value).length; $('#kPr').textContent = `${n}/${pr.total}`; });
-  $('#kSave').classList.toggle('hidden', done); $('#kDone').classList.toggle('hidden', done);
+  $('#kSave').classList.toggle('hidden', done); $('#kDone').classList.toggle('hidden', done); $('#kCancel').classList.toggle('hidden', done);
+  $('#kCancel').textContent = kind === 'Exit' ? 'Cancel exit' : 'Cancel onboarding';
+  $('#kCancel').onclick = async () => {
+    const a = await askReason({ title: `${kind === 'Exit' ? 'Cancel exit' : 'Cancel onboarding'}: ${rec.EmployeeName}`, list: D.lists.CANCEL_REASON, reasonLabel: 'Reason for cancelling', okText: kind === 'Exit' ? 'Cancel exit' : 'Cancel onboarding', danger: true,
+      intro: kind === 'Exit' ? `${rec.EmployeeName} goes back to their earlier status (Confirmed / Probation) and stays active. The checklist is kept as Cancelled.`
+        : emp(rec.EmpId).CandidateAppNo ? `${rec.EmployeeName} will be marked "Did not join": removed from headcount and attrition, login disabled, and the candidate goes back to Hiring as Offer Rejected. The checklist is kept as Cancelled.`
+        : `This onboarding was started for existing staff. Only the checklist is cancelled — ${rec.EmployeeName} stays active.` });
+    if (!a) return;
+    try { const r = await api('cancelChecklist', { kind, recordId, reason: a.reason, note: a.note }); await load(); showMsg($('#m-k'), r.message, true); } catch (e) { showMsg($('#m-k'), e.message); }
+  };
   $('#kDone').textContent = kind === 'Exit' ? 'Complete exit (mark Exited)' : 'Mark onboarding complete';
   $('#m-k').textContent = '';
   $('#kSave').onclick = () => save(kind, recordId).then(r => r && showMsg($('#m-k'), 'Saved', true));

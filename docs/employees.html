@@ -18,7 +18,7 @@
       <div><label>Search</label><input id="q" placeholder="Name, ID or phone"></div>
       <div><label>Store</label><select id="fStore"></select></div>
       <div><label>Position</label><select id="fPos"></select></div>
-      <div><label>Status</label><select id="fStatus"><option value="">Active (all)</option><option>Probation</option><option>Confirmed</option><option>Notice Period</option><option>Exited</option></select></div>
+      <div><label>Status</label><select id="fStatus"><option value="">Active (all)</option><option>Probation</option><option>Confirmed</option><option>Notice Period</option><option>Exited</option><option>Did not join</option></select></div>
     </div>
     <div class="tbl-wrap"><table><thead><tr><th>ID</th><th>Name</th><th>Position</th><th>Store</th><th>Reports to</th><th>Joined</th><th>Status</th></tr></thead><tbody id="rows"></tbody></table></div>
   </section>
@@ -80,11 +80,11 @@ async function load() {
 function draw() {
   const q = $('#q').value.trim().toLowerCase(), st = $('#fStore').value, ps = $('#fPos').value, ss = $('#fStatus').value;
   const list = D.employees.filter(e =>
-    (ss ? e.Status === ss : e.Status !== 'Exited') && (!st || e.StoreCode === st) && (!ps || e.PositionCode === ps) &&
+    (ss ? e.Status === ss : !['Exited', 'Did not join'].includes(e.Status)) && (!st || e.StoreCode === st) && (!ps || e.PositionCode === ps) &&
     (!q || [e.FullName, e.EmpId, e.Phone].join(' ').toLowerCase().includes(q)));
-  const active = D.employees.filter(e => e.Status !== 'Exited').length;
+  const active = D.employees.filter(e => !['Exited', 'Did not join'].includes(e.Status)).length;
   $('#count').textContent = `${active} active employees · showing ${list.length}`;
-  const cls = s => s === 'Confirmed' ? 'yes' : s === 'Exited' ? 'no' : '';
+  const cls = s => s === 'Confirmed' ? 'yes' : ['Exited', 'Did not join'].includes(s) ? 'no' : '';
   $('#rows').innerHTML = list.map(e => `<tr class="click" data-id="${esc(e.EmpId)}"><td><b>${esc(e.EmpId)}</b></td><td><span class="who">${avatar(e.EmpId, e.FullName, 28)}<span>${esc(e.FullName)}</span></span></td><td>${esc(posName(e.PositionCode))}</td><td>${esc(e.StoreCode)}</td><td>${esc(empName(e.ReportingManagerId))}</td><td>${fmtD(e.JoiningDate)}</td><td><span class="pill ${cls(e.Status)}">${esc(e.Status)}</span></td></tr>`).join('')
     || '<tr><td colspan="7" style="color:var(--muted)">No employees found.</td></tr>';
   if (canEdit) document.querySelectorAll('tr.click').forEach(r => r.onclick = () => openEmp(D.employees.find(e => e.EmpId === r.dataset.id)));
@@ -95,7 +95,7 @@ function draw() {
 // Manager list: people in the parent position (same store first), else everyone active
 function fillManagers(selected) {
   const pos = D.positions.find(p => p.PositionCode === $('#ePos').value), store = $('#eStore').value;
-  const others = D.employees.filter(e => e.Status !== 'Exited' && (!editing || e.EmpId !== editing.EmpId));
+  const others = D.employees.filter(e => !['Exited', 'Did not join'].includes(e.Status) && (!editing || e.EmpId !== editing.EmpId));
   if (!pos || !pos.ParentPositionCode) { $('#eMgr').innerHTML = '<option value="">— Top position, no manager —</option>'; $('#mgrHint').textContent = ''; return; }
   const inParent = others.filter(e => e.PositionCode === pos.ParentPositionCode);
   const pick = inParent.filter(e => e.StoreCode === store).concat(inParent.filter(e => e.StoreCode !== store));

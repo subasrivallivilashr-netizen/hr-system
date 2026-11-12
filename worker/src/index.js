@@ -302,7 +302,7 @@ export class Hub {
   async kpiContext(month, user) {
     const emps = await this.read('Organisation', 'Employees');
     const monthEnd = month + '-31';
-    let employees = emps.filter(e => e.Status !== 'Exited' && (!e.JoiningDate || e.JoiningDate <= monthEnd));
+    let employees = emps.filter(e => !GONE(e.Status) && (!e.JoiningDate || e.JoiningDate <= monthEnd));
     if (user.r === ROLES.MANAGER) {
       if (!user.e) throw new Error('Your login is not linked to an employee. Ask Admin to link it in Settings → Users.');
       employees = employees.filter(e => e.ReportingManagerId === user.e);
@@ -464,12 +464,14 @@ export class Hub {
   // Creates a record + one item row per active template item (returns existing open record if any)
   async startChecklist(kind, e, extra) {
     const recs = await this.read('HR_Ops', kind + '_Records');
-    const open = recs.find(r => r.EmpId === e.EmpId && r.Status !== 'Completed');
+    const open = recs.find(r => r.EmpId === e.EmpId && !['Completed', 'Cancelled'].includes(r.Status));
     if (open) { if (kind === 'Exit') throw new Error('An exit is already in progress for this employee'); return clean(open); }
-    if (kind === 'Onboarding' && recs.find(r => r.EmpId === e.EmpId)) throw new Error('Onboarding already completed for this employee');
+    if (kind === 'Onboarding' && recs.find(r => r.EmpId === e.EmpId && r.Status === 'Completed')) throw new Error('Onboarding already completed for this employee');
     const tpl = (await this.checklistTemplate(kind)).filter(t => t.Active !== 'No');
     const now = new Date().toISOString();
-    const rec = { RecordId: (kind === 'Exit' ? 'EX-' : 'OB-') + e.EmpId + '-' + now.slice(0, 10).replace(/-/g, ''), EmpId: e.EmpId, EmployeeName: e.FullName,
+    let rid = (kind === 'Exit' ? 'EX-' : 'OB-') + e.EmpId + '-' + now.slice(0, 10).replace(/-/g, ''), n = 2;
+    while (recs.find(r => r.RecordId === rid)) rid = rid.replace(/-\d+$/, m => m.length > 3 ? m : '') + '-' + n++;   // restarted the same day after a cancel
+    const rec = { RecordId: rid, EmpId: e.EmpId, EmployeeName: e.FullName,
       PositionCode: e.PositionCode, Status: 'In Progress', CreatedAt: now, CompletedAt: '', ...(kind === 'Exit' ? extra : { JoiningDate: e.JoiningDate }) };
     await this.append('HR_Ops', kind + '_Records', [rec]);
     await this.append('HR_Ops', kind + '_Items', tpl.map(t => ({ RecordId: rec.RecordId, ItemId: t.ItemId, Status: '', Remarks: '', DoneBy: '', DoneAt: '' })));
@@ -701,7 +703,7 @@ const ACTIONS = {
       const users = (await this.read('Settings', 'Users')).map(u => ({
         Username: u.Username, Role: u.Role, FullName: u.FullName, StoreCodes: u.StoreCodes, Active: u.Active, CreatedAt: u.CreatedAt, EmpId: u.EmpId || ''
       }));
-      const employees = (await this.read('Organisation', 'Employees')).filter(e => e.Status !== 'Exited')
+      const employees = (await this.read('Organisation', 'Employees')).filter(e => !GONE(e.Status))
         .map(e => ({ EmpId: e.EmpId, FullName: e.FullName, PositionCode: e.PositionCode, StoreCode: e.StoreCode }));
       return { company, stores, users, employees };
     }
@@ -784,7 +786,7 @@ const ACTIONS = {
       const company = {}; (await this.read('Settings', 'Company')).forEach(r => company[r.Key] = r.Value);
       const emps = await this.read('Organisation', 'Employees');
       const filled = {};
-      emps.filter(e => e.Status !== 'Exited').forEach(e => { const k = e.PositionCode + '|' + e.StoreCode; filled[k] = (filled[k] || 0) + 1; });
+      emps.filter(e => !GONE(e.Status)).forEach(e => { const k = e.PositionCode + '|' + e.StoreCode; filled[k] = (filled[k] || 0) + 1; });
       return { positions, stores, sameStructure: company.SameStructureAllStores !== 'No', filled };
     }
   },
@@ -848,7 +850,7 @@ const ACTIONS = {
       const positions = await this.read('Organisation', 'Positions');
       if (positions.some(r => r.ParentPositionCode === p.positionCode && r.Active !== 'No')) throw new Error('Move or deactivate the positions under it first');
       const emps = await this.read('Organisation', 'Employees');
-      if (emps.some(e => e.PositionCode === p.positionCode && e.Status !== 'Exited')) throw new Error('Employees are still in this position');
+      if (emps.some(e => e.PositionCode === p.positionCode && !GONE(e.Status))) throw new Error('Employees are still in this position');
       await this.update('Organisation', 'Positions', 'PositionCode', p.positionCode, { Active: 'No' });
       await this.log('Organisation', p.positionCode, 'Position deactivated', '', user.u);
       return { message: 'Deactivated' };
@@ -1258,7 +1260,7 @@ const ACTIONS = {
         ['Candidates', 'Interview_Schedule', 'Interview_Tokens', 'HR_Status', 'Selection_Offer', 'Interview_Questions'].map(T));
       const positions = (await this.read('Organisation', 'Positions')).filter(p => p.Active !== 'No').map(clean);
       const stores = (await this.read('Settings', 'Stores')).filter(s => s.Active !== 'No').map(clean);
-      const employees = (await this.read('Organisation', 'Employees')).filter(e => e.Status !== 'Exited')
+      const employees = (await this.read('Organisation', 'Employees')).filter(e => !GONE(e.Status))
         .map(e => ({ EmpId: e.EmpId, FullName: e.FullName, PositionCode: e.PositionCode, StoreCode: e.StoreCode }));
       const form = await this.applyForm(), lists = await this.lists();
       return { form, lists, candidates, schedule, tokens, scores, offers, questions, positions, stores, employees,
@@ -1555,7 +1557,7 @@ const ACTIONS = {
         };
       }
       const employees = (await this.read('Organisation', 'Employees')).map(e => ({ EmpId: e.EmpId, FullName: e.FullName, PositionCode: e.PositionCode,
-        StoreCode: e.StoreCode, JoiningDate: e.JoiningDate, Status: e.Status, ExitDate: e.ExitDate }));
+        StoreCode: e.StoreCode, JoiningDate: e.JoiningDate, Status: e.Status, ExitDate: e.ExitDate, CandidateAppNo: e.CandidateAppNo || '' }));
       const positions = (await this.read('Organisation', 'Positions')).map(p => ({ PositionCode: p.PositionCode, PositionName: p.PositionName }));
       return { onboarding: out.Onboarding, exit: out.Exit, employees, positions, lists: await this.lists() };
     }
@@ -1564,6 +1566,7 @@ const ACTIONS = {
   startOnboarding: {
     auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR], write: true,
     fn: async function (p, user) {
+      throw new Error('Onboarding starts automatically when a candidate is marked Joined in Hiring.');
       const e = (await this.read('Organisation', 'Employees')).find(x => x.EmpId === p.empId);
       if (!e || e.Status === 'Exited') throw new Error('Employee not found');
       const r = await this.startChecklist('Onboarding', e, null);
@@ -1576,11 +1579,11 @@ const ACTIONS = {
     auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR], write: true,
     fn: async function (p, user) {
       const e = (await this.read('Organisation', 'Employees')).find(x => x.EmpId === p.empId);
-      if (!e || e.Status === 'Exited') throw new Error('Employee not found or already exited');
+      if (!e || GONE(e.Status)) throw new Error('Employee not found or already exited');
       if (!p.lastWorkingDay) throw new Error('Last working day is required');
       const lwd = normDate(p.lastWorkingDay);
-      await this.ensureColumns('HR_Ops', 'Exit_Records', ['Reason']);
-      const r = await this.startChecklist('Exit', e, { LastWorkingDay: lwd, Reason: p.reason || '' });
+      await this.ensureColumns('HR_Ops', 'Exit_Records', ['Reason', 'PrevStatus']);
+      const r = await this.startChecklist('Exit', e, { LastWorkingDay: lwd, Reason: p.reason || '', PrevStatus: e.Status });
       await this.update('Organisation', 'Employees', 'EmpId', e.EmpId, { Status: 'Notice Period', ExitDate: lwd, UpdatedAt: new Date().toISOString() });
       await this.log('HR_Ops', r.RecordId, 'Exit started', `${e.FullName} · LWD ${lwd}${p.reason ? ' · ' + p.reason : ''}`, user.u);
       return { message: 'Exit started', recordId: r.RecordId };
@@ -1594,6 +1597,7 @@ const ACTIONS = {
       const rec = (await this.read('HR_Ops', kind + '_Records')).find(r => r.RecordId === p.recordId);
       if (!rec) throw new Error('Record not found');
       if (rec.Status === 'Completed') throw new Error('Already completed');
+      if (rec.Status === 'Cancelled') throw new Error('This checklist was cancelled');
       const old = (await this.read('HR_Ops', kind + '_Items')).filter(i => i.RecordId === rec.RecordId);
       const okVals = kind === 'Exit' ? ['', 'Done', 'NA'] : ['', 'Yes', 'NA'];
       const now = new Date().toISOString();
@@ -1617,6 +1621,7 @@ const ACTIONS = {
       const rec = clean((await this.read('HR_Ops', kind + '_Records')).find(r => r.RecordId === p.recordId) || null);
       if (!rec || !rec.RecordId) throw new Error('Record not found');
       if (rec.Status === 'Completed') throw new Error('Already completed');
+      if (rec.Status === 'Cancelled') throw new Error('This checklist was cancelled');
       const tpl = await this.checklistTemplate(kind);
       const items = (await this.read('HR_Ops', kind + '_Items')).filter(i => i.RecordId === rec.RecordId);
       const missing = items.filter(i => !i.Status && (tpl.find(t => t.ItemId === i.ItemId) || {}).Mandatory !== 'No');
@@ -1632,6 +1637,43 @@ const ACTIONS = {
       }
       await this.log('HR_Ops', rec.RecordId, kind + ' completed', rec.EmployeeName, user.u);
       return { message: kind === 'Exit' ? 'Exit completed. Employee marked Exited.' : 'Onboarding completed' };
+    }
+  },
+
+  // Cancel an open onboarding / exit (e.g. employee decided to stay). The record is kept, marked Cancelled.
+  cancelChecklist: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR], write: true,
+    fn: async function (p, user) {
+      const kind = p.kind === 'Exit' ? 'Exit' : 'Onboarding', tab = kind + '_Records';
+      const reason = String(p.reason || '').trim(); if (!reason) throw new Error('Choose the reason for cancelling');
+      const rec = clean((await this.read('HR_Ops', tab)).find(r => r.RecordId === p.recordId) || null);
+      if (!rec || !rec.RecordId) throw new Error('Record not found');
+      if (['Completed', 'Cancelled'].includes(rec.Status)) throw new Error('This checklist is already ' + rec.Status.toLowerCase());
+      await this.ensureColumns('HR_Ops', tab, ['CancelReason', 'CancelledBy', 'CancelledAt']);
+      const now = new Date().toISOString(), why = reason + (p.note ? ' — ' + String(p.note).trim() : '');
+      await this.upsertMany('HR_Ops', tab, ['RecordId'], [{ ...rec, Status: 'Cancelled', CancelReason: why, CancelledBy: user.u, CancelledAt: now }]);
+      const e = (await this.read('Organisation', 'Employees')).find(x => x.EmpId === rec.EmpId);
+      let message = kind + ' cancelled';
+      if (e && kind === 'Exit' && e.Status === 'Notice Period') {
+        const back = ['Probation', 'Confirmed'].includes(rec.PrevStatus) ? rec.PrevStatus : (e.ProbationEndDate && String(e.ProbationEndDate) > now.slice(0, 10) ? 'Probation' : 'Confirmed');
+        await this.update('Organisation', 'Employees', 'EmpId', e.EmpId, { Status: back, ExitDate: '', UpdatedAt: now });
+        message += `. ${e.FullName} is back to ${back}.`;
+      }
+      if (e && kind === 'Onboarding' && e.CandidateAppNo && !GONE(e.Status)) {
+        // Hired person did not actually join: keep the record as "Did not join", out of headcount and attrition
+        await this.update('Organisation', 'Employees', 'EmpId', e.EmpId, { Status: 'Did not join', ExitDate: '', UpdatedAt: now });
+        const users = (await this.read('Settings', 'Users')).filter(u => u.EmpId === e.EmpId && u.Active !== 'No');
+        for (const u of users) await this.update('Settings', 'Users', 'Username', u.Username, { Active: 'No' });
+        const cand = (await this.read('Hiring', 'Candidates')).find(c => c.AppNo === e.CandidateAppNo);
+        if (cand) await this.update('Hiring', 'Candidates', 'AppNo', cand.AppNo, { Status: 'Offer Rejected', Remarks: 'Did not join: ' + why, UpdatedAt: now });
+        const off = (await this.read('Hiring', 'Selection_Offer')).find(o => o.AppNo === e.CandidateAppNo);
+        if (off) await this.upsertMany('Hiring', 'Selection_Offer', ['AppNo'], [{ ...clean(off), Status: 'Declined', UpdatedAt: now }]);
+        await this.log('Organisation', e.EmpId, 'Did not join', `${e.FullName} · ${why}${users.length ? ' · login disabled' : ''}`, user.u);
+        if (cand) await this.log('Hiring', cand.AppNo, 'Did not join', why, user.u);
+        message += `. ${e.FullName} is marked "Did not join"${cand ? ' and the candidate is back in Hiring as Offer Rejected' : ''}.`;
+      }
+      await this.log('HR_Ops', rec.RecordId, kind + ' cancelled', `${rec.EmployeeName} · ${why}`, user.u);
+      return { message };
     }
   },
 
@@ -1824,7 +1866,7 @@ const ACTIONS = {
       await this.prefetch(pre);
       const company = await this.companyMap();
       const brand = {}; BRAND_KEYS.forEach(k => brand[k] = company[k] || '');
-      let employees = (await this.read('Organisation', 'Employees')).map(clean);
+      let employees = (await this.read('Organisation', 'Employees')).map(clean).filter(e => e.Status !== 'Did not join');
       if (!isHR) {
         if (!user.e) throw new Error('Your login is not linked to an employee. Ask Admin to link it in Settings → Users.');
         employees = employees.filter(e => e.ReportingManagerId === user.e);
@@ -2374,7 +2416,7 @@ function validateEmp(e, ctx, existing) {
     if (!e.ReportingManagerId) throw new Error('Reporting manager is required');
     if (e.ReportingManagerId === e.EmpId) throw new Error('An employee cannot report to themselves');
     const mgr = ctx.employees.find(x => x.EmpId === e.ReportingManagerId);
-    if (!mgr || mgr.Status === 'Exited') throw new Error('Reporting manager not found: ' + e.ReportingManagerId);
+    if (!mgr || GONE(mgr.Status)) throw new Error('Reporting manager not found: ' + e.ReportingManagerId);
   }
   if (e.Status === 'Probation' && !e.ProbationEndDate && e.JoiningDate) {
     const d = new Date(e.JoiningDate); d.setDate(d.getDate() + Number(ctx.company.ProbationDays || 90));
@@ -2478,5 +2520,9 @@ const LIST_DEFS = {
   REJECT_REASON: { name: 'Rejection reasons', values: ['Not reachable', 'Did not attend interview', 'Salary expectation too high', 'Not suitable for the role', 'Did not clear interview', 'Candidate not interested', 'Location not suitable'] },
   EXIT_REASON: { name: 'Exit reasons', values: ['Better opportunity', 'Higher studies', 'Relocation', 'Personal / family reasons', 'Health reasons', 'Absconding', 'Terminated', 'Retirement'] },
   TRANSFER_REASON: { name: 'Transfer / promotion reasons', values: ['Promotion', 'Transfer', 'Store requirement', 'Performance', 'Employee request', 'Re-designation'] },
-  EMPLOYMENT_TYPE: { name: 'Employment types', values: ['Permanent', 'Contract', 'Trainee'] }
+  EMPLOYMENT_TYPE: { name: 'Employment types', values: ['Permanent', 'Contract', 'Trainee'] },
+  CANCEL_REASON: { name: 'Checklist cancellation reasons', values: ['Employee decided to stay', 'Did not turn up', 'Backed out after joining', 'Joining postponed'] }
 };
+
+// Not part of the workforce any more (left, or hired but never joined)
+function GONE(status) { return status === 'Exited' || status === 'Did not join'; }

@@ -45,6 +45,7 @@ function corsHeaders(request, env) {
 export class Hub {
   constructor(state, env) {
     this.env = env;
+    this.state = state;
     this.cache = new Map();          // key -> {at, rows}
     this.writeChain = Promise.resolve();
     this.gToken = null; this.gTokenExp = 0;
@@ -128,10 +129,15 @@ export class Hub {
 
   async gfetch(url, opts = {}) {
     const token = await this.googleToken();
-    const res = await fetch(url, { ...opts, headers: { ...(opts.headers || {}), Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' } });
-    const j = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error('Google Sheets error ' + res.status + ': ' + (j.error && j.error.message || ''));
-    return j;
+    for (let attempt = 0; ; attempt++) {
+      const res = await fetch(url, { ...opts, headers: { ...(opts.headers || {}), Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' } });
+      const j = await res.json().catch(() => ({}));
+      if (res.ok) return j;
+      // Google's per-minute limit: wait and try again (2 s, 5 s, 12 s) before giving up
+      if (res.status === 429 && attempt < 3) { await new Promise(r => setTimeout(r, [2000, 5000, 12000][attempt])); continue; }
+      if (res.status === 429) throw new Error('Google Sheets is busy right now (too many requests in the last minute). Please wait a minute and try again.');
+      throw new Error('Google Sheets error ' + res.status + ': ' + (j.error && j.error.message || ''));
+    }
   }
 
   // ── Registry: module key -> spreadsheet ID ──
@@ -154,9 +160,37 @@ export class Hub {
     throw new Error('Spreadsheet not found in Registry: ' + module);
   }
 
-  async fetchTab(ssId, tab) {
+  async fetchTab(ssId, tab, key) {
     const j = await this.gfetch(`https://sheets.googleapis.com/v4/spreadsheets/${ssId}/values/${encodeURIComponent(tab)}?valueRenderOption=UNFORMATTED_VALUE&dateTimeRenderOption=FORMATTED_STRING`);
+    if (key) this.keepHead(key, j.values);
     return rowsOf(j.values);
+  }
+  keepHead(key, values) {                 // the first row of a read is the header row: no separate request needed
+    this.headCache = this.headCache || new Map();
+    if (values && values[0] && values[0].length) this.headCache.set(key, values[0]);
+  }
+
+  // Durable memory (Durable Object storage): which tabs exist, per spreadsheet. Survives restarts and new deploys.
+  async persisted() {
+    if (this._pers) return this._pers;
+    let saved = null;
+    try { saved = this.state && this.state.storage ? await this.state.storage.get('tabTitles') : null; } catch (e) { saved = null; }
+    this._pers = { titles: new Map(Object.entries(saved || {}).map(([k, v]) => [k, new Set(v)])) };
+    return this._pers;
+  }
+  async savePersisted() {
+    if (!(this.state && this.state.storage)) return;
+    const o = {}; this._pers.titles.forEach((v, k) => o[k] = [...v]);
+    try { await this.state.storage.put('tabTitles', o); } catch (e) { /* memory only */ }
+  }
+  // Tab names of a spreadsheet (one metadata request the first time, then remembered)
+  async tabTitles(ssId, fresh) {
+    const P = await this.persisted();
+    if (!fresh && P.titles.has(ssId)) return P.titles.get(ssId);
+    const meta = await this.gfetch(`https://sheets.googleapis.com/v4/spreadsheets/${ssId}?fields=sheets.properties.title`);
+    const set = new Set((meta.sheets || []).map(x => x.properties.title));
+    P.titles.set(ssId, set); await this.savePersisted();
+    return set;
   }
 
   // Loads many tabs at once: one batchGet per spreadsheet, all spreadsheets in parallel. Fills the read cache.
@@ -171,13 +205,13 @@ export class Hub {
       const tryGet = async list => {
         const q = list.map(t => 'ranges=' + encodeURIComponent(t)).join('&');
         const j = await this.gfetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}/values:batchGet?${q}&valueRenderOption=UNFORMATTED_VALUE&dateTimeRenderOption=FORMATTED_STRING`);
-        (j.valueRanges || []).forEach((vr, i) => this.cache.set(m + '/' + list[i], { at: Date.now(), rows: rowsOf(vr.values) }));
+        (j.valueRanges || []).forEach((vr, i) => { this.keepHead(m + '/' + list[i], vr.values); this.cache.set(m + '/' + list[i], { at: Date.now(), rows: rowsOf(vr.values) }); });
       };
       try { await tryGet(tabs); }
       catch (e) {                                   // a tab is missing → keep only tabs that exist and retry once
-        try { const meta = await this.gfetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}?fields=sheets.properties.title`);
-          const have = new Set((meta.sheets || []).map(x => x.properties.title)); const ok = tabs.filter(t => have.has(t));
-          if (ok.length) await tryGet(ok); } catch (e2) { /* fall back to normal reads */ }
+        if (BUSY(e)) throw e;
+        try { const have = await this.tabTitles(id, true); const ok = tabs.filter(t => have.has(t));
+          if (ok.length) await tryGet(ok); } catch (e2) { if (BUSY(e2)) throw e2; /* fall back to normal reads */ }
       }
     }));
   }
@@ -187,7 +221,31 @@ export class Hub {
     const key = module + '/' + tab;
     const hit = this.cache.get(key);
     if (hit && Date.now() - hit.at < READ_TTL_MS) return hit.rows;
-    const rows = await this.fetchTab(await this.ssId(module), tab);
+    // Cache miss: refresh every tab of this spreadsheet in ONE request (the yearly KPI / log books are read tab by tab)
+    if (!/^(KPI|ActivityLog)_/.test(module)) {
+      try {
+        this.inflight = this.inflight || new Map();
+        let job = this.inflight.get(module);            // reads of the same spreadsheet at the same moment share one request
+        if (!job) {
+          job = (async () => { const id = await this.ssId(module), titles = await this.tabTitles(id); await this.prefetch([...titles].map(t => [module, t])); })();
+          this.inflight.set(module, job);
+          job.finally(() => this.inflight.delete(module)).catch(() => {});
+        }
+        await job;
+        const hit2 = this.cache.get(key); if (hit2) return hit2.rows;
+      } catch (e) { if (BUSY(e)) throw e; /* fall back to a single read */ }
+    }
+    let rows;
+    try { rows = await this.fetchTab(await this.ssId(module), tab, key); }
+    catch (e) {
+      // Tab deleted by hand in Google Sheets: recreate it (when the app knows its columns) and read again
+      const heads = this.tabHeads && this.tabHeads.get(key);
+      if (!/Unable to parse range/i.test(e.message) || !heads || this._repairing) throw e;
+      this._repairing = true;
+      try { await this.tabTitles(await this.ssId(module), true); this.tabsOk.delete(key); await this.ensureTab(module, tab, heads); }
+      finally { this._repairing = false; }
+      rows = await this.fetchTab(await this.ssId(module), tab, key);
+    }
     this.cache.set(key, { at: Date.now(), rows });
     return rows;
   }
@@ -196,10 +254,12 @@ export class Hub {
     this.headCache = this.headCache || new Map();
     const hk = module + '/' + tab;
     if (this.headCache.has(hk)) return this.headCache.get(hk);
+    await this.read(module, tab).catch(e => { if (BUSY(e)) throw e; });     // a normal read also keeps the header row
+    if (this.headCache.has(hk)) return this.headCache.get(hk);
     const id = await this.ssId(module);
     const j = await this.gfetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}/values/${encodeURIComponent(tab)}!1:1`);
     const h = (j.values && j.values[0]) || [];
-    this.headCache.set(hk, h);
+    if (h.length) this.headCache.set(hk, h);
     return h;
   }
 
@@ -496,25 +556,31 @@ export class Hub {
   async ensureTab(module, tab, headers) {
     this.tabsOk = this.tabsOk || new Set(); this.tabLocks = this.tabLocks || new Map();
     const key = module + '/' + tab;
+    this.tabHeads = this.tabHeads || new Map(); this.tabHeads.set(key, headers);      // remembered so a deleted tab can be rebuilt
     if (this.tabsOk.has(key)) return;
     if (this.tabLocks.has(key)) return this.tabLocks.get(key);          // someone is already creating it: wait for them
     const job = (async () => {
       const id = await this.ssId(module);
-      const meta = await this.gfetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}?fields=sheets.properties`);
-      let exists = !!(meta.sheets || []).find(s => s.properties.title === tab);
-      if (!exists) {
+      let titles = await this.tabTitles(id);
+      if (!titles.has(tab)) titles = await this.tabTitles(id, true);      // remembered list may be old: check once with Google
+      if (!titles.has(tab)) {
+        let created = true;
         try {
           await this.gfetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}:batchUpdate`, { method: 'POST',
             body: JSON.stringify({ requests: [{ addSheet: { properties: { title: tab, gridProperties: { rowCount: 1000, columnCount: Math.max(12, headers.length) } } } }] }) });
-        } catch (e) { if (!/already exists/i.test(e.message)) throw e; }
-      }
-      // Header row missing (new tab, or a tab created half-way earlier) → write it
-      const h = await this.gfetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}/values/${encodeURIComponent(tab)}!1:1`);
-      if (!(h.values && h.values[0] && h.values[0].length))
+        } catch (e) { if (!/already exists/i.test(e.message)) throw e; created = false; }
+        if (created) await this.gfetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}/values/${encodeURIComponent(tab)}!A1?valueInputOption=RAW`,
+          { method: 'PUT', body: JSON.stringify({ values: [headers] }) });
+        titles.add(tab); await this.savePersisted();
+        if (this.headCache) this.headCache.delete(key);
+        this.cache.delete(key);
+      } else if (!(await this.headers(module, tab)).length) {
+        // tab exists but its header row is empty (created half-way earlier): write the header (usually no extra read — the batch read has it)
         await this.gfetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}/values/${encodeURIComponent(tab)}!A1?valueInputOption=RAW`,
           { method: 'PUT', body: JSON.stringify({ values: [headers] }) });
-      if (this.headCache) this.headCache.delete(key);
-      this.cache.delete(key);
+        if (this.headCache) this.headCache.delete(key);
+        this.cache.delete(key);
+      }
       this.tabsOk.add(key);
     })();
     this.tabLocks.set(key, job);
@@ -2592,3 +2658,6 @@ function moduleFor(action, body) {
   if (action === 'getLifecycle') return ['ONBOARDING', 'EXIT'];
   return ACTION_MODULE[action] ? [ACTION_MODULE[action]] : null;
 }
+
+// Google's per-minute limit already retried: don't try other ways, tell the user
+function BUSY(e) { return /Google Sheets is busy/.test(String(e && e.message || e)); }

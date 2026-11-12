@@ -58,13 +58,15 @@ const REPORTS = [
 ];
 // ── helpers ──
 const MON = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-const ymNow = () => new Date().toISOString().slice(0, 7);
-const ymAdd = (ym, n) => { const d = new Date(ym + '-01T00:00:00'); d.setMonth(d.getMonth() + n); return d.toISOString().slice(0, 7); };
+// Date helpers work on plain text (YYYY-MM / YYYY-MM-DD) so the time zone can never shift a day or month
+const pad2 = n => String(n).padStart(2, '0');
+const ymNow = () => { const d = new Date(); return d.getFullYear() + '-' + pad2(d.getMonth() + 1); };
+const ymAdd = (ym, n) => { const [y, m] = ym.split('-').map(Number), t = y * 12 + (m - 1) + n; return Math.floor(t / 12) + '-' + pad2(t % 12 + 1); };
 const ymLabel = ym => MON[Number(ym.slice(5)) - 1].slice(0, 3) + ' ' + ym.slice(0, 4);
-const monthEnd = ym => { const d = new Date(ym + '-01T00:00:00'); d.setMonth(d.getMonth() + 1); d.setDate(0); return d.toISOString().slice(0, 10); };
+const monthEnd = ym => { const [y, m] = ym.split('-').map(Number); return ym + '-' + pad2(new Date(y, m, 0).getDate()); };
 const longD = d => { if (!d) return ''; const x = new Date(String(d).slice(0, 10) + 'T00:00:00'); return isNaN(x) ? d : x.getDate() + ' ' + MON[x.getMonth()].slice(0, 3) + ' ' + x.getFullYear(); };
 const days = (a, b) => Math.round((new Date(String(b).slice(0, 10)) - new Date(String(a).slice(0, 10))) / 864e5);
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => { const d = new Date(); return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); };
 const P = c => D.positions.find(p => p.PositionCode === c) || {};
 const pN = c => P(c).PositionName || c || '';
 const stN = c => (D.stores.find(s => s.StoreCode === c) || {}).StoreName || c || '';
@@ -162,7 +164,7 @@ const build = {
     const emps = D.employees.filter(e => !st || e.StoreCode === st);
     const exited = e => e.Status === 'Exited' && e.ExitDate;
     const hcAt = d => emps.filter(e => e.JoiningDate && e.JoiningDate <= d && !(exited(e) && e.ExitDate < d)).length;
-    const months = []; for (let m = from; m <= to; m = ymAdd(m, 1)) months.push(m);
+    const months = []; for (let m = from; m <= to && months.length < 60; m = ymAdd(m, 1)) months.push(m);
     let totLeft = 0, totJoin = 0; const avgHc = [];
     const mrows = months.map(m => {
       const start = hcAt(m + '-01'), end = hcAt(monthEnd(m)) - emps.filter(e => exited(e) && e.ExitDate === monthEnd(m)).length;

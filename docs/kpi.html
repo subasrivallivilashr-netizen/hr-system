@@ -225,7 +225,7 @@ const isHR = S && ['SuperAdmin', 'Admin', 'HR'].includes(S.role);
 const isAdmin = S && ['SuperAdmin', 'Admin'].includes(S.role);
 if (!isHR) $('#apTab').classList.add('hidden');
 let M = null, curEmp = null;
-(() => { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1); $('#month').value = d.toISOString().slice(0, 7); })();
+(() => { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1); $('#month').value = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); })();
 $('#month').addEventListener('change', loadMonth);
 ['eStore', 'eStat'].forEach(i => $('#' + i).addEventListener('change', drawEntry));
 $('#eq').addEventListener('input', drawEntry);
@@ -365,7 +365,7 @@ $('#lockBtn').onclick = async () => {
 
 // ───── Reports ─────
 let R = null;
-(() => { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1); $('#rTo').value = d.toISOString().slice(0, 7); d.setMonth(d.getMonth() - 5); $('#rFrom').value = d.toISOString().slice(0, 7); })();
+(() => { const ym = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1); $('#rTo').value = ym(d); d.setMonth(d.getMonth() - 5); $('#rFrom').value = ym(d); })();
 $('#rGo').onclick = () => loadReport();
 ['rStore'].forEach(i => $('#' + i).addEventListener('change', drawReport));
 $('#rEmp').addEventListener('change', () => loadTrend($('#rEmp').value));

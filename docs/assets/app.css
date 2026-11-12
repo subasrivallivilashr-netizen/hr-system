@@ -106,3 +106,17 @@ dialog.wide{width:min(900px,96vw)}
 .tl{list-style:none;padding:0;margin:0}.tl li{padding:6px 0;border-bottom:1px dashed var(--line);font-size:13px}.tl li span{color:var(--muted)}
 .dup{color:var(--err);font-size:11px;font-weight:600}
 .progress{height:8px;background:#eef1f5;border-radius:99px;overflow:hidden;min-width:80px}.progress div{height:100%;background:var(--ok)}
+
+/* Grouped top menu */
+.nav{overflow:visible!important}
+.nav .nl{color:#dbe4f5;text-decoration:none;padding:7px 12px;border-radius:6px;white-space:nowrap;background:none;border:0;font:inherit;cursor:pointer;display:inline-flex;align-items:center;gap:4px}
+.nav .nl.on,.nav .nl:hover,.ng.open>.nl{background:rgba(255,255,255,.14);color:#fff}
+.nav .car{font-size:10px;opacity:.8}
+.ng{position:relative}
+.dd{display:none;position:absolute;top:calc(100% + 4px);left:0;min-width:200px;background:#fff;border:1px solid var(--line);border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.15);padding:6px;z-index:50}
+.ng.open .dd{display:block}
+@media (hover:hover){.ng:hover .dd{display:block}.ng:hover>.nl{background:rgba(255,255,255,.14);color:#fff}}
+.dd a{display:block;padding:8px 10px;border-radius:6px;color:var(--ink)!important;text-decoration:none;white-space:nowrap;background:none!important}
+.dd a:hover{background:#f1f4f9!important}.dd a.on{background:#e6edf8!important;font-weight:600}
+@media (max-width:700px){.nav{flex-wrap:wrap}.dd{position:fixed;left:12px;right:12px;top:auto;min-width:0}}
+@media print{.top{display:none!important}}

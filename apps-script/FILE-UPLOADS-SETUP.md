@@ -25,6 +25,13 @@ App → **Settings → Files** → copy the **Secret**.
 App → **Settings → Files** → paste the URL → **Save** → **Test connection** → should say *Connected*.
 Then set Photo / Resume / Aadhar to Mandatory, Optional or Hidden → **Save document types**.
 
+## E. Let the app open files (once per client)
+1. Enable the Google Drive API for the service account's Cloud project:
+   console.cloud.google.com → APIs & Services → Library → "Google Drive API" → **Enable**.
+2. If the service account was shared on individual sheets (not the whole folder): Drive → right-click
+   **HR System Files** → Share → add the service account email as **Viewer** (untick Notify).
+Without this, uploads work but **View** shows "Could not read the file from Google Drive (403/404)".
+
 ## Test checklist
 1. Open the QR apply form on a phone → the 3 document fields show as you set them.
 2. Submit without a mandatory file → "Please attach: …".

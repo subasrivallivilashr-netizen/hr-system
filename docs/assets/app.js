@@ -71,3 +71,19 @@ function renderTop(active, companyName) {
   document.addEventListener('keydown', e => { if (e.key === 'Escape') closeAll(); });
 }
 function setCompanyName(n) { const s = Session.get(); if (s && n) { s.company = n; Session.set(s); const el = $('#co'); if (el) el.textContent = n; } }
+
+// ── Auto-update: when version.json changes, refresh the browser's copy of every page & asset once, then reload ──
+(async function autoUpdate() {
+  try {
+    const r = await fetch('version.json?t=' + Date.now(), { cache: 'no-store' }); if (!r.ok) return;
+    const v = (await r.json()).v; let old = null;
+    try { old = localStorage.getItem('hr_app_version'); } catch {}
+    if (!v || old === v) return;
+    try { localStorage.setItem('hr_app_version', v); } catch {}
+    try { if (sessionStorage.getItem('hr_updated') === v) return; sessionStorage.setItem('hr_updated', v); } catch {}
+    const pages = ['index', 'org', 'employees', 'roles', 'policies', 'kpi', 'hiring', 'interview', 'apply', 'lifecycle', 'letters', 'letter', 'reports', 'settings'].map(p => p + '.html');
+    const assets = ['app.js', 'app.css', 'letter.js', 'salary.js', 'files.js'].map(a => 'assets/' + a);
+    await Promise.all(pages.concat(assets).map(u => fetch(u, { cache: 'reload' }).catch(() => {})));
+    if (old) location.reload();                     // first ever visit: files are already fresh, no reload needed
+  } catch {}
+})();

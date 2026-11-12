@@ -138,17 +138,33 @@ export class Hub {
 
   async fetchTab(ssId, tab) {
     const j = await this.gfetch(`https://sheets.googleapis.com/v4/spreadsheets/${ssId}/values/${encodeURIComponent(tab)}?valueRenderOption=UNFORMATTED_VALUE&dateTimeRenderOption=FORMATTED_STRING`);
-    const values = j.values || [];
-    if (!values.length) return [];
-    const head = values[0];
-    return values.slice(1).map((row, i) => {
-      const o = { _row: i + 2 };
-      head.forEach((h, c) => o[h] = row[c] === undefined ? '' : row[c]);
-      return o;
-    });
+    return rowsOf(j.values);
   }
 
-  // Cached read: (module, tab) -> array of row objects
+  // Loads many tabs at once: one batchGet per spreadsheet, all spreadsheets in parallel. Fills the read cache.
+  async prefetch(pairs) {
+    const now = Date.now(), by = {};
+    pairs.forEach(([m, t]) => { const h = this.cache.get(m + '/' + t); if (!(h && now - h.at < READ_TTL_MS)) (by[m] = by[m] || []).push(t); });
+    if (!Object.keys(by).length) return;
+    const reg = await this.getRegistry(); await this.googleToken();
+    await Promise.all(Object.entries(by).map(async ([m, tabs]) => {
+      if (!reg[m]) return;
+      const id = await this.ssId(m);
+      const tryGet = async list => {
+        const q = list.map(t => 'ranges=' + encodeURIComponent(t)).join('&');
+        const j = await this.gfetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}/values:batchGet?${q}&valueRenderOption=UNFORMATTED_VALUE&dateTimeRenderOption=FORMATTED_STRING`);
+        (j.valueRanges || []).forEach((vr, i) => this.cache.set(m + '/' + list[i], { at: Date.now(), rows: rowsOf(vr.values) }));
+      };
+      try { await tryGet(tabs); }
+      catch (e) {                                   // a tab is missing → keep only tabs that exist and retry once
+        try { const meta = await this.gfetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}?fields=sheets.properties.title`);
+          const have = new Set((meta.sheets || []).map(x => x.properties.title)); const ok = tabs.filter(t => have.has(t));
+          if (ok.length) await tryGet(ok); } catch (e2) { /* fall back to normal reads */ }
+      }
+    }));
+  }
+
+  // Cached read: (module, tab) -> array of row objects (see rowsOf)
   async read(module, tab) {
     const key = module + '/' + tab;
     const hit = this.cache.get(key);
@@ -1705,6 +1721,12 @@ const ACTIONS = {
     auth: true,
     fn: async function (p, user) {
       const isHR = [ROLES.SUPER, ROLES.ADMIN, ROLES.HR].includes(user.r);
+      const yNow = new Date().getFullYear(), pre = [['Settings', 'Company'], ['Settings', 'Stores'], ['Organisation', 'Employees'], ['Organisation', 'Positions'], ['Organisation', 'TransferHistory'],
+        ['Library', 'Role_Summary'], ['Performance', 'KPI_Parameters'], ['Performance', 'Rating_Bands']];
+      for (let y = yNow - 2; y <= yNow + 1; y++) pre.push(['KPI_' + y, 'KPI_Summary'], ['KPI_' + y, 'KPI_Entries']);
+      if (isHR) pre.push(...['Candidates', 'Interview_Schedule', 'Selection_Offer', 'Rejected_Candidates'].map(t => ['Hiring', t]),
+        ...['Onboarding', 'Exit'].flatMap(k => [['HR_Ops', k + '_Template'], ['HR_Ops', k + '_Records'], ['HR_Ops', k + '_Items']]), ['Library', 'Letters_Issued']);
+      await this.prefetch(pre);
       const company = await this.companyMap();
       const brand = {}; BRAND_KEYS.forEach(k => brand[k] = company[k] || '');
       let employees = (await this.read('Organisation', 'Employees')).map(clean);
@@ -2251,4 +2273,15 @@ async function checkPassword(password, saltB64, expected) {
   if (!saltB64 || !expected) return false;
   const { hash } = await hashPassword(password, saltB64);
   return hash === expected;
+}
+
+function rowsOf(values) {
+  values = values || [];
+  if (!values.length) return [];
+  const head = values[0];
+  return values.slice(1).map((row, i) => {
+    const o = { _row: i + 2 };
+    head.forEach((h, c) => o[h] = row[c] === undefined ? '' : row[c]);
+    return o;
+  });
 }

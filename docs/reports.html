@@ -305,7 +305,7 @@ const build = {
     XROWS = [['Field', 'Value'], ['Employee ID', e.EmpId], ['Name', e.FullName], ['Position', pN(e.PositionCode)], ['Store', stN(e.StoreCode)], ['Manager', E(e.ReportingManagerId).FullName || ''], ['Joined', e.JoiningDate], ['Status', e.Status]];
     $('#rinfo').textContent = 'One-page summary of the employee from all modules.';
     return page('Employee profile', e.FullName,
-      `<div style="display:flex;gap:16px;align-items:center;margin-bottom:6px">${avatar(e.EmpId, e.FullName, 84)}<div><div style="font-size:14pt;font-weight:700">${esc(e.FullName)}</div><div class="muted">${esc(pN(e.PositionCode))} · ${esc(stN(e.StoreCode))}</div></div></div>
+      `<div style="display:flex;gap:16px;align-items:center;margin-bottom:6px">${avatar(e.EmpId, e.FullName, 84)}<div><div class="nt" style="font-size:14pt;font-weight:700">${esc(e.FullName)}</div><div class="muted nt">${esc(pN(e.PositionCode))} · ${esc(stN(e.StoreCode))}</div></div></div>
        <h3>Personal</h3><div class="kv2"><div><span>Name</span><b>${esc(e.FullName)}</b></div><div><span>Employee ID</span>${esc(e.EmpId)}</div><div><span>Gender</span>${esc(e.Gender || '')}</div>
         <div><span>Date of birth</span>${longD(e.DOB)}${age !== '' ? ` (${age} yrs)` : ''}</div><div><span>Phone</span>${esc(e.Phone || '')}</div><div><span>Email</span>${esc(e.Email || '')}</div></div>
        <h3>Job</h3><div class="kv2"><div><span>Position</span><b>${esc(pN(e.PositionCode))}</b></div><div><span>Department</span>${esc(P(e.PositionCode).Department || P(e.PositionCode).Branch || '')}</div>

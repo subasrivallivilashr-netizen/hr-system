@@ -205,8 +205,9 @@ function renderTop(active, companyName) {
   const initials = String(s.name || '?').split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase();
   $('#top').innerHTML = `${s.logo ? `<div class="sb-logo"><img src="${esc(s.logo)}" alt="${name} logo"></div>` : ''}<div class="sb-brand"><i></i><b id="co">${name}</b></div>
     <nav class="nav" aria-label="Main menu">${html}</nav>
-    <div class="sb-foot"><div class="sb-user"><span class="sb-av" aria-hidden="true">${esc(initials)}</span><div class="sb-who"><b>${esc(s.name)}</b><small>${esc(s.role === 'SuperAdmin' ? 'C&B Super Admin' : s.role)}</small></div>
+    <div class="sb-foot">${langPicker(s.languages)}<div class="sb-user"><span class="sb-av" aria-hidden="true">${esc(initials)}</span><div class="sb-who"><b>${esc(s.name)}</b><small>${esc(s.role === 'SuperAdmin' ? 'C&B Super Admin' : s.role)}</small></div>
       <button type="button" id="out" class="sb-out" aria-label="Sign out" title="Sign out">${sbIcon('out', 17)}</button></div>${CREDIT_HTML}</div>`;
+  wireLangPicker(); startTranslator(s.languages);
   document.querySelectorAll('#top .sb-grp > .sb-h').forEach(b => b.onclick = () => {
     const grp = b.parentElement, open = !grp.classList.contains('open');
     grp.classList.toggle('open', open); b.setAttribute('aria-expanded', open);
@@ -226,8 +227,8 @@ function renderTop(active, companyName) {
     renderTop.checked = true;
     api('me').then(m => { const cur = Session.get(); if (!cur || !m.modules) return;
       const changed = JSON.stringify(cur.modules || null) !== JSON.stringify(m.modules);
-      const look = (cur.logo || '') !== (m.logo || '') || (cur.company || '') !== (m.company || '');
-      cur.modules = m.modules; cur.logo = m.logo || ''; cur.company = m.company || ''; Session.set(cur);
+      const look = (cur.logo || '') !== (m.logo || '') || (cur.company || '') !== (m.company || '') || JSON.stringify(cur.languages || []) !== JSON.stringify(m.languages || []);
+      cur.modules = m.modules; cur.logo = m.logo || ''; cur.company = m.company || ''; cur.languages = m.languages || []; Session.set(cur);
       if (changed) location.reload(); else if (look) renderTop(active, companyName);
     }).catch(() => {});
   }
@@ -249,3 +250,60 @@ function setCompanyName(n) { const s = Session.get(); if (s && n) { s.company = 
     if (old) location.reload();                     // first ever visit: files are already fresh, no reload needed
   } catch {}
 })();
+
+// ── Languages ─────────────────────────────────────────────────────────────────────────────
+// Google Translate only changes what is SHOWN. Everything saved stays English:
+//  • every <option> gets a fixed English value before translation can touch it
+//  • data (table cells, names, codes, dropdown values, inputs) is marked "do not translate"
+//  • the server refuses non-English letters in typed text (see the API)
+const LANGS = [['ta', 'தமிழ் · Tamil'], ['en', 'English'], ['kn', 'ಕನ್ನಡ · Kannada'], ['hi', 'हिन्दी · Hindi'], ['te', 'తెలుగు · Telugu'], ['ml', 'മലയാളം · Malayalam'], ['mr', 'मराठी · Marathi']];
+const KEEP_ENGLISH = 'td,option,select,input,textarea,.pill,.tag-inc,.av,.av-i,.sb-av,.sb-who,.sb-brand b,#co,#co2,.credit,.lang-pick,.kv-v,code,.dup,'
+  + '.nm,.meta,#plist li:not(.cat),#qList li span:first-child,#dEmpT,#kT,#kS,#cT,#cS,.rp .rt span,.rp .co,.nt';
+function protectNode(root) {
+  if (!root || root.nodeType !== 1) return;
+  const els = root.matches && root.matches('option,' + KEEP_ENGLISH) ? [root] : [];
+  root.querySelectorAll && els.push(...root.querySelectorAll('option,' + KEEP_ENGLISH));
+  els.forEach(el => {
+    if (el.tagName === 'OPTION' && !el.hasAttribute('value')) el.setAttribute('value', el.textContent);   // the saved value is the English text
+    if (el.getAttribute('translate') !== 'no') el.setAttribute('translate', 'no');
+  });
+  // "Label: value" blocks — the label may be translated, the value stays as stored
+  const kv = root.matches && root.matches(KV_SEL) ? [root] : [];
+  root.querySelectorAll && kv.push(...root.querySelectorAll(KV_SEL));
+  kv.forEach(div => [...div.childNodes].forEach((n, i) => {
+    if (i === 0 && n.nodeName === 'SPAN') return;
+    if (n.nodeType === 3 && n.textContent.trim()) { const w = document.createElement('span'); w.setAttribute('translate', 'no'); n.replaceWith(w); w.appendChild(n); }
+    else if (n.nodeType === 1 && n.getAttribute('translate') !== 'no') n.setAttribute('translate', 'no');
+  }));
+}
+const KV_SEL = '.kv > div, .kv2 > div, #cKv > div';
+protectNode(document.documentElement);
+new MutationObserver(list => list.forEach(m => m.addedNodes.forEach(protectNode))).observe(document.documentElement, { childList: true, subtree: true });
+
+function curLang() { const m = document.cookie.match(/(?:^|;\s*)googtrans=\/en\/([a-z-]+)/i); return m ? m[1] : 'en'; }
+function setLang(code) {
+  const exp = code === 'en' ? 'Thu, 01 Jan 1970 00:00:00 GMT' : new Date(Date.now() + 365 * 864e5).toUTCString();
+  document.cookie = `googtrans=/en/${code};expires=${exp};path=/`;
+  try { localStorage.setItem('hr_lang', code); } catch {}
+  location.reload();
+}
+// Enabled languages (Settings → Languages). English is always there once any other language is on.
+function enabledLangs(list) { const on = (list || []).filter(c => c !== 'en'); return on.length ? LANGS.filter(([c]) => c === 'en' || on.includes(c)) : []; }
+function langPicker(list, id = 'langSel') {
+  const L = enabledLangs(list); if (!L.length) return '';
+  const cur = curLang();
+  return `<label class="lang-pick" translate="no"><span aria-hidden="true">🌐</span><select id="${id}" aria-label="Language">${L.map(([c, n]) => `<option value="${c}" ${c === cur ? 'selected' : ''}>${n}</option>`).join('')}</select></label>`;
+}
+function wireLangPicker(id = 'langSel') { const s = document.getElementById(id); if (s) s.onchange = () => setLang(s.value); }
+// Loads Google's translator only when a non-English language is chosen and allowed for this company
+function startTranslator(list) {
+  const cur = curLang(), L = enabledLangs(list);
+  if (cur === 'en') return;
+  if (!L.some(([c]) => c === cur)) { setLang('en'); return; }        // language was switched off by C&B
+  if (window.__gtLoaded) return; window.__gtLoaded = true;
+  const box = document.createElement('div'); box.id = 'gtBox'; box.style.display = 'none'; document.body.appendChild(box);
+  window.__gtInit = () => { try { new google.translate.TranslateElement({ pageLanguage: 'en', includedLanguages: L.map(([c]) => c).join(','), autoDisplay: false }, 'gtBox'); } catch (e) { } };
+  const sc = document.createElement('script'); sc.src = 'https://translate.google.com/translate_a/element.js?cb=__gtInit'; sc.async = true;
+  sc.onerror = () => console.warn('Translation service not reachable — showing English');
+  document.head.appendChild(sc);
+}

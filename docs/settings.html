@@ -13,6 +13,7 @@
     <button data-t="form">Apply form</button>
     <button data-t="lists">Lists</button>
     <button data-t="modules">Modules</button>
+    <button data-t="languages">Languages</button>
     <button data-t="me">My password</button>
   </div>
 
@@ -53,7 +54,7 @@
       <div><label>Next number</label><input id="EmpIdNextNumber" type="number" min="1"></div>
       <div><label>Numbering</label><select id="EmpIdPerStore"><option value="No">Across whole company</option><option value="Yes">Separate per store (store code added)</option></select></div>
     </div>
-    <div class="preview">Next ID will look like: <b id="idPrev"></b></div>
+    <div class="preview">Next ID will look like: <b id="idPrev" translate="no"></b></div>
     <div class="row-end"><span class="msg" id="m-ids"></span><button class="btn" data-save="ids">Save</button></div>
   </section>
 
@@ -109,6 +110,13 @@
     <div class="row-end"><span class="msg" id="m-mod"></span><button class="btn" id="modSave">Save modules</button></div>
   </section>
 
+  <section id="t-languages" class="card hidden" style="max-width:760px">
+    <h2>Languages</h2>
+    <p class="sub">Switch on the languages users can choose. The screen is translated by Google Translate; <b>everything saved stays in English</b> — names, codes, amounts and dropdown values are never translated, letters always stay English, and typed text must be in English letters. With no language switched on, the app shows English only and no language button appears.</p>
+    <div id="langList" class="mod-list"></div>
+    <div class="row-end"><span class="msg" id="m-lang"></span><button class="btn" id="langSave">Save languages</button></div>
+  </section>
+
   <section id="t-me" class="card hidden" style="max-width:420px">
     <h2>Change my password</h2>
     <label>Current password</label><input id="op" type="password">
@@ -151,7 +159,7 @@ let DATA = null;
 renderTop('settings');
 const isSA = S && S.role === 'SuperAdmin';
 // Admin: Users + own password only. C&B Super Admin: everything (Files / Apply form only when their module is on)
-const TAB_OK = { company: isSA, ids: isSA, stores: isSA, users: true, files: isSA && hasMod('FILES'), form: isSA && hasMod('HIRING'), lists: isSA, modules: isSA, me: true };
+const TAB_OK = { company: isSA, ids: isSA, stores: isSA, users: true, files: isSA && hasMod('FILES'), form: isSA && hasMod('HIRING'), lists: isSA, modules: isSA, languages: isSA, me: true };
 document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('hidden', !TAB_OK[b.dataset.t]));
 if (isSA) $('#dangerZone').classList.remove('hidden'); else $('#logoBox').classList.add('hidden');
 if (S && !isSA) { document.querySelectorAll('#tabs button').forEach(x => x.classList.toggle('on', x.dataset.t === 'users')); document.querySelectorAll('main > section').forEach(s => s.classList.toggle('hidden', s.id !== 't-users')); }
@@ -352,6 +360,18 @@ $('#rsGo').onclick = async () => {
   } catch (e) { showMsg($('#m-rs'), e.message); }
 };
 
+// ---- Languages (C&B only)
+async function loadLangs() {
+  const r = await api('getLanguages');
+  $('#langList').innerHTML = LANGS.map(([c, n]) => `<label class="mod-row"><input type="checkbox" value="${c}" ${c === 'en' || r.languages.includes(c) ? 'checked' : ''} ${c === 'en' ? 'disabled' : ''} style="width:auto">
+    <span translate="no"><b>${esc(n)}</b><span class="sub">${c === 'en' ? 'Always available — the language the data is stored in' : 'Shown by Google Translate'}</span></span></label>`).join('');
+}
+$('#langSave').onclick = async () => {
+  const languages = [...document.querySelectorAll('#langList input:checked:not(:disabled)')].map(x => x.value);
+  try { const r = await api('saveLanguages', { languages }); const s = Session.get(); s.languages = r.languages; Session.set(s); showMsg($('#m-lang'), 'Saved — reloading…', true); setTimeout(() => location.reload(), 700); }
+  catch (e) { showMsg($('#m-lang'), e.message); }
+};
+
 // ---- Modules (C&B only)
 let MODS = null;
 async function loadModules() {
@@ -373,6 +393,6 @@ $('#modSave').onclick = async () => {
 
 if (S) {
   load().catch(e => uiAlert(e.message));
-  if (isSA) { loadModules().catch(e => showMsg($('#m-mod'), e.message)); if (hasMod('HIRING')) loadFormSetup().catch(e => showMsg($('#m-fq'), e.message)); if (hasMod('FILES')) loadFiles().catch(e => showMsg($('#m-st'), e.message)); }
+  if (isSA) { loadModules().catch(e => showMsg($('#m-mod'), e.message)); loadLangs().catch(e => showMsg($('#m-lang'), e.message)); if (hasMod('HIRING')) loadFormSetup().catch(e => showMsg($('#m-fq'), e.message)); if (hasMod('FILES')) loadFiles().catch(e => showMsg($('#m-st'), e.message)); }
 }
 </script></body></html>

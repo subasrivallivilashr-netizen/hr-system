@@ -218,3 +218,10 @@ body.has-side{padding-left:244px}
 .logo-pv{width:160px;height:64px;border:1px dashed var(--line);border-radius:8px;display:flex;align-items:center;justify-content:center;background:#fff;padding:6px}
 .logo-pv img{max-width:100%;max-height:100%;object-fit:contain}
 .danger-zone{border-color:#f3c3be}.danger-zone h2{border-left-color:var(--err)}
+/* language picker + hide Google Translate's own bar, tooltips and highlights */
+.lang-pick{display:flex;align-items:center;gap:6px;margin:0;font-weight:400;color:var(--muted)}
+.lang-pick select{padding:6px 8px;font-size:13px;width:100%}
+.lang-top{position:absolute;top:14px;right:14px;width:190px}
+iframe.skiptranslate,.goog-te-banner-frame,#goog-gt-tt,.goog-te-balloon-frame,.goog-tooltip,.VIpgJd-ZVi9od-ORHb-OEVmcd,.VIpgJd-ZVi9od-aZ2wEe-wOHMyf{display:none!important}
+body{top:0!important}
+.goog-text-highlight,font[style*="background-color"]{background:none!important;box-shadow:none!important}

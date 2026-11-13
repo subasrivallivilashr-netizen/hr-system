@@ -69,6 +69,7 @@ export class Hub {
         if (!user) return json({ ok: false, error: 'Not logged in or session expired' }, 401);
         if (handler.roles && !handler.roles.includes(user.r)) return json({ ok: false, error: 'Not allowed for your role' }, 403);
       }
+      if (handler.write) { const bad = nonEnglish(body); if (bad) return json({ ok: false, error: `Please type in English letters only ("${bad}" has letters from another language).` }); }
       const need = moduleFor(action, body);
       if (need) {
         const on = await this.modules();
@@ -765,14 +766,14 @@ const ACTIONS = {
         throw new Error('Invalid username or password');
       }
       const company = await this.companyMap();
-      return { token: await this.makeSession(u), role: u.Role, fullName: u.FullName, stores: u.StoreCodes, empId: u.EmpId || '', company: company.CompanyName || '', logo: company.BrandLogo || '', modules: await this.modules() };
+      return { token: await this.makeSession(u), role: u.Role, fullName: u.FullName, stores: u.StoreCodes, empId: u.EmpId || '', company: company.CompanyName || '', logo: company.BrandLogo || '', modules: await this.modules(), languages: langsOf(company) };
     }
   },
 
-  me: { auth: true, fn: async function (p, user) { const c = await this.companyMap(); return { username: user.u, role: user.r, fullName: user.n, modules: await this.modules(), company: c.CompanyName || '', logo: c.BrandLogo || '' }; } },
+  me: { auth: true, fn: async function (p, user) { const c = await this.companyMap(); return { username: user.u, role: user.r, fullName: user.n, modules: await this.modules(), company: c.CompanyName || '', logo: c.BrandLogo || '', languages: langsOf(c) }; } },
 
   // Public: name + logo for the login page
-  getBrandPublic: { fn: async function () { const c = await this.companyMap(); return { companyName: c.CompanyName || '', logo: c.BrandLogo || '' }; } },
+  getBrandPublic: { fn: async function () { const c = await this.companyMap(); return { companyName: c.CompanyName || '', logo: c.BrandLogo || '', languages: langsOf(c) }; } },
 
   // ── Settings ──
   getSettings: {
@@ -1307,7 +1308,7 @@ const ACTIONS = {
   getApplyForm: {
     fn: async function () {
       const company = await this.companyMap(), mods = await this.modules();
-      if (!mods.includes('HIRING')) return { closed: true, companyName: company.CompanyName || '', logo: company.BrandLogo || '' };
+      if (!mods.includes('HIRING')) return { closed: true, companyName: company.CompanyName || '', logo: company.BrandLogo || '', languages: langsOf(company) };
       const positions = (await this.read('Organisation', 'Positions')).filter(p => p.Active !== 'No' && p.ParentPositionCode)
         .map(p => ({ PositionCode: p.PositionCode, PositionName: p.PositionName, StoreCode: p.StoreCode }));
       const stores = (await this.read('Settings', 'Stores')).filter(s => s.Active !== 'No')
@@ -1318,7 +1319,7 @@ const ACTIONS = {
       const form = (await this.applyForm()).filter(f => f.Setting !== 'Hidden')
         .map(f => ({ Code: f.Code, Label: f.Label, Section: f.Section, Type: f.Type, Options: f.Options, Hint: f.Hint, Required: f.Setting === 'Mandatory' }));
       const L = await this.lists();
-      return { companyName: company.CompanyName || '', logo: company.BrandLogo || '', positions, stores, uploads, form, lists: { SOURCE: L.SOURCE } };
+      return { companyName: company.CompanyName || '', logo: company.BrandLogo || '', languages: langsOf(company), positions, stores, uploads, form, lists: { SOURCE: L.SOURCE } };
     }
   },
 
@@ -2182,6 +2183,21 @@ const ACTIONS = {
     }
   },
 
+  getLanguages: {
+    auth: true, roles: [ROLES.SUPER],
+    fn: async function () { return { languages: langsOf(await this.companyMap()), all: LANGUAGES }; }
+  },
+
+  saveLanguages: {
+    auth: true, roles: [ROLES.SUPER], write: true,
+    fn: async function (p, user) {
+      const on = LANGUAGES.filter(c => c !== 'en' && (p.languages || []).includes(c));
+      await this.setCompany({ Languages: on.join(',') });
+      await this.log('Settings', 'LANGUAGES', 'Languages saved', on.join(', ') || 'English only', user.u);
+      return { message: 'Saved', languages: on };
+    }
+  },
+
   getModules: {
     auth: true, roles: [ROLES.SUPER],
     fn: async function () { return { modules: await this.modules(), all: Object.entries(MODULES).map(([k, m]) => ({ key: k, ...m })) }; }
@@ -2714,3 +2730,17 @@ function moduleFor(action, body) {
 
 // Google's per-minute limit already retried: don't try other ways, tell the user
 function BUSY(e) { return /Google Sheets is busy/.test(String(e && e.message || e)); }
+
+// ── Languages shown through Google Translate (display only; data is always English) ──
+const LANGUAGES = ['ta', 'en', 'kn', 'hi', 'te', 'ml', 'mr'];
+function langsOf(company) { return String(company.Languages || '').split(',').map(x => x.trim()).filter(c => c && c !== 'en' && LANGUAGES.includes(c)); }
+// Letters of non-Latin scripts (Tamil, Kannada, Hindi, … also Greek, Arabic, Chinese…). Latin, digits, punctuation and ₹ are fine.
+const NON_LATIN = /[Ͱ-῿Ⰰ-ⷿ⺀-퟿豈-﫿ﹰ-﻿]/;   // emoji and symbols are allowed
+// Returns the name of the first typed field containing non-English letters (passwords are not checked)
+function nonEnglish(v, key = '') {
+  if (typeof v === 'string') return NON_LATIN.test(v) ? niceKey(key) : '';
+  if (Array.isArray(v)) { for (const x of v) { const b = nonEnglish(x, key); if (b) return b; } return ''; }
+  if (v && typeof v === 'object') { for (const [k, x] of Object.entries(v)) { if (/password/i.test(k)) continue; const b = nonEnglish(x, k); if (b) return b; } }
+  return '';
+}
+function niceKey(k) { return String(k || 'text').replace(/^Q_/, '').replace(/_/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2').replace(/\b\w/g, c => c.toUpperCase()); }

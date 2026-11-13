@@ -36,7 +36,7 @@
       <label>Signature image <span class="hint">(optional — scan of the signature)</span></label><input type="file" id="sigF" accept="image/*"><img id="sigP" class="imgprev hidden"><button type="button" id="sigX" class="hidden">Remove signature</button>
       <div class="row-end"><span class="msg" id="m-b"></span><button class="btn" id="saveB">Save</button></div>
     </div>
-    <div class="pv"><div class="pvbox"><div class="page" id="bPage"></div></div></div>
+    <div class="pv"><div class="pvbox"><div class="page" id="bPage" translate="no"></div></div></div>
   </section>
 
   <section id="t-tpl" class="hidden">
@@ -141,13 +141,13 @@ function editT(type, fresh) {
       <div class="grid"><div><label>Title</label><input id="tTitle" value="${esc(t.Title)}"></div>
         <div><label>Insert field at cursor</label><select id="tIns"><option value="">— choose —</option>${groups}</select></div></div>
       <label>Wording <span class="hint">## heading · - bullet · 1. numbered · **bold** · {{SalaryTable}} for the salary break-up</span></label>
-      <textarea id="tBody" class="big" style="min-height:420px">${esc(t.Body)}</textarea>
+      <textarea id="tBody" translate="no" class="big" style="min-height:420px">${esc(t.Body)}</textarea>
       <details style="margin-top:10px"><summary style="cursor:pointer;font-weight:600">Advanced: custom layout (HTML)</summary>
         <p class="sub">For clients who want their exact letter design. Leave empty to use the standard letterhead layout. Use {{Logo}}, {{Title}}, {{Body}}, {{SalaryTable}}, {{SignatureBlock}}, {{Signature}}, {{Header}}, {{Footer}} and any field.</p>
         <textarea id="tHtml" class="big" style="min-height:200px">${esc(t.CustomHTML || '')}</textarea></details>
       <div class="row-end"><span class="msg" id="m-t"></span>${!t.custom && !t.isDefault ? '<button id="tReset">Reset to default</button>' : ''}<button class="btn" id="tSave">Save</button></div>
     </div>
-    <div class="pv"><div class="pvbox"><div class="page" id="tPage"></div></div></div>`;
+    <div class="pv"><div class="pvbox"><div class="page" id="tPage" translate="no"></div></div></div>`;
   const pv = () => { $('#lstyle').textContent = letterStyles(brand); $('#tPage').innerHTML = renderLetter({ brand, title: $('#tTitle').value, body: $('#tBody').value, customHtml: $('#tHtml').value, fields: sampleFields(), salary: sampleSalary(), components: D.components, preview: true }); };
   ['tTitle', 'tBody', 'tHtml'].forEach(i => $('#' + i).addEventListener('input', pv)); pv();
   $('#tIns').onchange = () => { const v = $('#tIns').value; if (!v) return; const ta = $('#tBody'), s = ta.selectionStart;

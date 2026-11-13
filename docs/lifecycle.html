@@ -24,7 +24,7 @@
   <section id="t-templates" class="card hidden">
     <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:end">
       <div><h2>Checklist templates</h2><p class="sub">Used for new onboarding / exit records. Records already started keep their items.</p></div>
-      <div style="min-width:200px"><label>Template</label><select id="tKind"><option>Onboarding</option><option>Exit</option></select></div>
+      <div style="min-width:200px"><label>Template</label><select id="tKind"><option value="Onboarding">Onboarding</option><option value="Exit">Exit</option></select></div>
     </div>
     <div class="tbl-wrap"><table><thead><tr><th>Section</th><th>Item</th><th style="width:110px">Mandatory</th><th style="width:100px">Active</th><th style="width:40px"></th></tr></thead><tbody id="tRows"></tbody></table></div>
     <div class="row-end"><button id="tAdd">+ Add item</button><span class="msg" id="m-t"></span><button class="btn" id="tSave">Save template</button></div>
@@ -56,7 +56,7 @@ if (S) {   // show only the enabled checklists (Settings → Modules)
   ['Onboarding', 'Exit'].forEach(k => {
     const on = hasMod(k.toUpperCase());
     document.querySelector(`#tabs button[data-t="${k}"]`).classList.toggle('hidden', !on);
-    [...document.querySelectorAll('#tKind option')].filter(o => o.textContent === k && !on).forEach(o => o.remove());
+    [...document.querySelectorAll('#tKind option')].filter(o => o.value === k && !on).forEach(o => o.remove());
   });
   document.querySelectorAll('#tabs button').forEach(x => x.classList.toggle('on', x.dataset.t === tab));
 }

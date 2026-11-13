@@ -2,6 +2,7 @@
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Job Application</title><link rel="stylesheet" href="assets/app.css"></head>
 <body>
+<div id="apLang" class="lang-top"></div>
 <div class="pub-head"><img id="pubLogo" class="pub-logo hidden" alt=""><h1 id="co">Job Application</h1><p>Fill in your details. HR will contact you.</p></div>
 <div class="pub">
   <form class="card" id="f" novalidate>
@@ -44,6 +45,7 @@ async function init() {
   try {
     const d = await api('getApplyForm');
     if (d.companyName) { $('#co').textContent = d.companyName + ' — Job Application'; document.title = d.companyName + ' — Apply'; }
+    $('#apLang').innerHTML = langPicker(d.languages, 'apLangSel'); wireLangPicker('apLangSel'); startTranslator(d.languages);
     if (d.logo) { $('#pubLogo').src = d.logo; $('#pubLogo').alt = (d.companyName || 'Company') + ' logo'; $('#pubLogo').classList.remove('hidden'); }
     if (d.closed) { $('#f').innerHTML = '<h2>Applications are closed</h2><p class="sub">We are not taking applications online right now. Please contact the store.</p>'; return; }
     FORM = d.form; CTX = { positions: d.positions, stores: d.stores, lists: d.lists };

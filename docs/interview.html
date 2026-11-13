@@ -2,6 +2,7 @@
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Interview Assessment</title><link rel="stylesheet" href="assets/app.css"></head>
 <body>
+<div id="ivLang" class="lang-top"></div>
 <div class="pub-head"><h1 id="co">Interview Assessment</h1><p id="hello">Loading…</p></div>
 <div class="pub">
   <div class="card hidden" id="err"><h2>Link not available</h2><p id="errMsg" class="sub"></p></div>
@@ -29,6 +30,7 @@
 const token = new URLSearchParams(location.search).get('t') || '';
 let D = null;
 async function init() {
+  api('getBrandPublic').then(b => { $('#ivLang').innerHTML = langPicker(b.languages, 'ivLangSel'); wireLangPicker('ivLangSel'); startTranslator(b.languages); }).catch(() => {});
   try { D = await api('getInterviewByToken', { token }); }
   catch (e) { $('#hello').textContent = ''; $('#errMsg').textContent = e.message; $('#err').classList.remove('hidden'); return; }
   if (D.companyName) $('#co').textContent = D.companyName + ' — Interview Assessment';

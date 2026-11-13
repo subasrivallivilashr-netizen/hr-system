@@ -2,6 +2,7 @@
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>HR System — Login</title><link rel="stylesheet" href="assets/app.css"></head>
 <body>
+<div id="lgLang" class="lang-top"></div>
 <div class="login-wrap"><form class="login" id="f">
   <img id="lgLogo" class="login-logo hidden" alt=""><h1 id="lgName">HR System</h1><p>Sign in to continue</p>
   <label for="u">Username</label><input id="u" autocomplete="username" required>
@@ -15,13 +16,14 @@ const HOME = { SuperAdmin: 'org.html', Admin: 'org.html', HR: 'org.html', Manage
 if (Session.get()) location.href = HOME[Session.get().role] || 'org.html';
 api('getBrandPublic').then(b => {
   if (b.companyName) { $('#lgName').textContent = b.companyName; document.title = b.companyName + ' — Login'; }
+  $('#lgLang').innerHTML = langPicker(b.languages, 'lgLangSel'); wireLangPicker('lgLangSel'); startTranslator(b.languages);
   if (b.logo) { $('#lgLogo').src = b.logo; $('#lgLogo').alt = (b.companyName || 'Company') + ' logo'; $('#lgLogo').classList.remove('hidden'); }
 }).catch(() => {});
 $('#f').addEventListener('submit', async e => {
   e.preventDefault(); const b = $('#b'); b.disabled = true; b.textContent = 'Signing in…';
   try {
     const d = await api('login', { username: $('#u').value, password: $('#p').value });
-    Session.set({ token: d.token, role: d.role, name: d.fullName, stores: d.stores, empId: d.empId, company: d.company, logo: d.logo || '', modules: d.modules, exp: Date.now() + 12 * 3600e3 });
+    Session.set({ token: d.token, role: d.role, name: d.fullName, stores: d.stores, empId: d.empId, company: d.company, logo: d.logo || '', modules: d.modules, languages: d.languages || [], exp: Date.now() + 12 * 3600e3 });
     location.href = HOME[d.role] || 'org.html';
   } catch (err) { showMsg($('#m'), err.message); b.disabled = false; b.textContent = 'Sign in'; }
 });

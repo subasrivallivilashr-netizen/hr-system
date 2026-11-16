@@ -727,6 +727,7 @@ export class Hub {
 }
 
 // ───────────────────────── Actions ─────────────────────────
+const PREF_HEAD = ['Username', 'Key', 'Value', 'UpdatedAt'];
 const ROLES = { SUPER: 'SuperAdmin', ADMIN: 'Admin', HR: 'HR', MANAGER: 'Manager' };
 
 const ACTIONS = {
@@ -909,8 +910,11 @@ const ACTIONS = {
       const row = {
         PositionCode: x.PositionCode, PositionName: x.PositionName.trim(), Level: x.Level,
         ParentPositionCode: x.ParentPositionCode || '', Branch: x.Branch || 'Sales', Department: x.Department || '',
-        StoreCode: x.StoreCode || 'ALL', ApprovedHeadcount: Number(x.ApprovedHeadcount || 1), Active: x.Active || 'Yes'
+        StoreCode: x.StoreCode || 'ALL', ApprovedHeadcount: Number(x.ApprovedHeadcount || 1), Active: x.Active || 'Yes',
+        LineType: x.LineType === 'Dotted' ? 'Dotted' : 'Direct'
       };
+      if (row.LineType === 'Dotted' && !row.ParentPositionCode) throw new Error('A top position cannot have a dotted reporting line');
+      await this.ensureColumns('Organisation', 'Positions', ['LineType']);
       if (isNew) await this.append('Organisation', 'Positions', [row]);
       else {
         await this.update('Organisation', 'Positions', 'PositionCode', row.PositionCode, row);
@@ -926,6 +930,43 @@ const ACTIONS = {
       }
       await this.log('Organisation', row.PositionCode, isNew ? 'Position added' : 'Position updated', row.PositionName, user.u);
       return { message: 'Saved', positionCode: row.PositionCode };
+    }
+  },
+
+  // Data for the organisation chart export (Admin / HR): structure, people, branding and this user's saved settings
+  getOrgExport: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR],
+    fn: async function (p, user) {
+      const positions = (await this.read('Organisation', 'Positions')).map(clean).filter(x => x.Active !== 'No')
+        .map(x => ({ PositionCode: x.PositionCode, PositionName: x.PositionName, ParentPositionCode: x.ParentPositionCode || '', Branch: x.Branch || '',
+          Department: x.Department || '', StoreCode: x.StoreCode || 'ALL', ApprovedHeadcount: Number(x.ApprovedHeadcount || 0), LineType: x.LineType === 'Dotted' ? 'Dotted' : 'Direct' }));
+      const stores = (await this.read('Settings', 'Stores')).map(clean).filter(s => s.Active !== 'No').map(s => ({ StoreCode: s.StoreCode, StoreName: s.StoreName, Type: s.Type }));
+      const company = await this.companyMap();
+      const people = (await this.read('Organisation', 'Employees')).filter(e => !GONE(e.Status))
+        .map(e => ({ EmpId: e.EmpId, Name: e.FullName, PositionCode: e.PositionCode, StoreCode: e.StoreCode }));
+      await this.ensureTab('Settings', 'User_Prefs', PREF_HEAD);
+      const pref = (await this.read('Settings', 'User_Prefs')).find(r => r.Username === user.u && r.Key === 'OrgExport');
+      let preset = null; try { preset = pref && pref.Value ? JSON.parse(pref.Value) : null; } catch { preset = null; }
+      return { positions, stores, people, preset, companyName: company.CompanyName || '', logo: company.BrandLogo || '', sameStructure: company.SameStructureAllStores !== 'No' };
+    }
+  },
+
+  // Saves (or clears) this user's chart export settings — per user, never shared
+  saveOrgExportPreset: {
+    auth: true, roles: [ROLES.SUPER, ROLES.ADMIN, ROLES.HR], write: true,
+    fn: async function (p, user) {
+      const value = p.preset ? JSON.stringify(p.preset) : '';
+      if (value.length > 45000) throw new Error('Too many custom changes to save. Reset some boxes and try again.');
+      await this.ensureTab('Settings', 'User_Prefs', PREF_HEAD);
+      const rows = await this.read('Settings', 'User_Prefs');
+      const row = { Username: user.u, Key: 'OrgExport', Value: value, UpdatedAt: new Date().toISOString() };
+      const old = rows.find(r => r.Username === user.u && r.Key === 'OrgExport');
+      if (old) {
+        // update() matches on one column, so rewrite the tab when the user has several keys
+        const all = rows.map(r => (r === old ? row : clean(r)));
+        await this.rewriteTab('Settings', 'User_Prefs', all);
+      } else await this.append('Settings', 'User_Prefs', [row]);
+      return { message: value ? 'Settings saved' : 'Settings cleared' };
     }
   },
 

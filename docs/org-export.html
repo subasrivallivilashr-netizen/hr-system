@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Export organisation chart</title><link rel="stylesheet" href="assets/app.css">
+<style>
+.ex{display:grid;grid-template-columns:310px 1fr;gap:16px;align-items:start}
+.ex .panel{position:sticky;top:12px;max-height:calc(100vh - 24px);overflow:auto}
+.ex h3{font-family:var(--head);font-size:14px;margin:14px 0 6px;padding-top:10px;border-top:1px solid var(--line)}
+.ex h3:first-of-type{border-top:0;padding-top:0}
+.ex .f{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:6px 0;font-size:13px}
+.ex .f select,.ex .f input[type=text]{width:170px;padding:6px 8px;font-size:13px}
+.ex .ck{display:flex;align-items:center;gap:7px;font-size:13px;margin:5px 0;font-weight:400}
+.ex .ck input{width:auto;margin:0}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.seg button{border:0;border-radius:0;padding:5px 10px;font-size:12px;background:#fff}
+.seg button.on{background:var(--ink);color:#faf8f3}
+.pvbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;color:var(--muted);font-size:13px}
+.pv{background:#e9e6dd;border-radius:10px;padding:14px;overflow:auto;max-height:calc(100vh - 120px)}
+.pv svg{display:block;background:#fff;box-shadow:0 4px 18px rgba(0,0,0,.15);margin:auto;height:auto}
+.pv .ocb:hover rect:first-child{filter:brightness(.96)}
+.selbox{background:var(--soft);border:1px solid var(--line);border-radius:10px;padding:10px;margin-top:6px}
+.sw{display:flex;gap:5px;flex-wrap:wrap}.sw button{width:22px;height:22px;padding:0;border-radius:5px}
+.sw button.on{outline:2px solid #2563eb;outline-offset:1px}
+.exbtns{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:12px}
+.hid li{display:flex;justify-content:space-between;align-items:center;font-size:12.5px;margin:3px 0}
+.lock{color:var(--muted);font-size:12px;margin-top:6px}
+#printArea{display:none}
+@media (max-width:900px){.ex{grid-template-columns:1fr}.ex .panel{position:static;max-height:none}}
+@media print{body>*:not(#printArea){display:none!important}#printArea{display:block!important}#printArea svg{width:100vw;height:100vh;display:block}}
+</style><style id="pageCss"></style></head>
+<body>
+<header class="top" id="top"></header>
+<main>
+  <section class="card" style="margin-bottom:12px">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+      <div><h2 style="margin:0">Export organisation chart</h2><p class="sub" style="margin:4px 0 0">Customise, preview, then export. Nothing here changes the structure — only this export.</p></div>
+      <a class="linkbtn" href="org.html">← Organisation</a>
+    </div>
+  </section>
+  <div class="ex">
+    <section class="card panel" id="panel">
+      <h3>1 · Page</h3>
+      <div class="f"><span>Paper</span><span class="seg" data-k="paper"><button data-v="A4">A4</button><button data-v="A3">A3</button><button data-v="A2">A2</button></span></div>
+      <div class="f"><span>Orientation</span><span class="seg" data-k="orient"><button data-v="L">Landscape</button><button data-v="P">Portrait</button></span></div>
+      <p class="sub" style="margin:2px 0 0;font-size:12px">The chart is always fitted on one page. Choose a bigger paper for large structures.</p>
+
+      <h3>2 · What to show</h3>
+      <div class="f"><span>Store</span><select data-k="store" id="oStore"></select></div>
+      <div class="f"><span>Start from</span><select data-k="root" id="oRoot"></select></div>
+      <div class="f"><span>Levels</span><select data-k="levels" id="oLevels"><option value="0">All</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option><option>7</option><option>8</option></select></div>
+      <label class="ck"><input type="checkbox" data-k="hc"> Headcount (filled / approved)</label>
+      <label class="ck"><input type="checkbox" data-k="names"> Employee names</label>
+      <label class="ck"><input type="checkbox" data-k="codes"> Position codes</label>
+      <label class="ck"><input type="checkbox" data-k="dotted"> Dotted-line (advisory) boxes</label>
+      <label class="ck"><input type="checkbox" data-k="groups"> Division &amp; department boxes</label>
+
+      <h3>3 · Look</h3>
+      <div class="f"><span>Colours</span><select data-k="colours"><option value="level">By level</option><option value="branch">By branch</option><option value="plain">Plain</option></select></div>
+      <div class="f"><span>Lines</span><span class="seg" data-k="lines"><button data-v="dashed">Dashed</button><button data-v="solid">Solid</button></span></div>
+      <div class="f"><span>Team lists</span><span class="seg" data-k="teams"><button data-v="stacked">Stacked</button><button data-v="side">Side by side</button></span></div>
+      <label class="ck"><input type="checkbox" data-k="legend"> Colour legend</label>
+      <div class="f"><span>Icons</span><span><button class="sm" type="button" id="sugIcons">Suggest icons</button> <button class="sm" type="button" id="clrIcons">Clear</button></span></div>
+
+      <h3>4 · Header &amp; footer</h3>
+      <div class="f"><span>Title</span><input type="text" data-k="title" id="oTitle"></div>
+      <label class="ck"><input type="checkbox" data-k="subtitle"> Store, date and headcount line</label>
+      <div class="f"><span>Logo</span><span class="seg" data-k="logo"><button data-v="left">Left</button><button data-v="right">Right</button><button data-v="off">Off</button></span></div>
+      <p class="lock">🔒 The "Powered by Consulting &amp; Beyond (C&amp;B)" footer is always included.</p>
+
+      <h3>5 · Fine-tune a box</h3>
+      <div id="selInfo" class="sub" style="font-size:12.5px;margin:0">Click any box on the preview to rename it for print, add an icon, note or colour, move it, or hide it.</div>
+      <div id="selBox" class="selbox hidden"></div>
+      <div id="hidBox" class="hidden" style="margin-top:8px"><b style="font-size:13px">Hidden boxes</b><ul class="hid" id="hidList" style="padding-left:0;list-style:none;margin:4px 0"></ul></div>
+
+      <h3>6 · Export</h3>
+      <div class="exbtns"><button class="btn" id="xPdf">PDF</button><button id="xPng">PNG</button><button id="xDraw">draw.io</button></div>
+      <p class="sub" style="font-size:12px;margin:6px 0 0">PDF: in the print window choose <b>Save as PDF</b>. draw.io: open the file at app.diagrams.net to edit anything.</p>
+      <div style="display:flex;gap:6px;margin-top:10px"><button style="flex:1" id="savePre">Save my settings</button><button style="flex:1" id="resetAll">Reset all</button></div>
+      <div class="msg" id="mPre"></div>
+    </section>
+    <section>
+      <div class="pvbar"><span id="pvInfo"></span><span style="flex:1"></span><button class="sm" id="zOut">−</button><span id="zVal">Fit</span><button class="sm" id="zIn">+</button><button class="sm" id="zFit">Fit</button></div>
+      <div class="pv" id="pv" translate="no"><p class="sub">Loading…</p></div>
+    </section>
+  </div>
+</main>
+<div id="printArea" translate="no"></div>
+
+<script src="assets/app.js"></script>
+<script src="assets/orgchart.js"></script>
+<script>
+const S = guard(['SuperAdmin', 'Admin', 'HR']);
+renderTop('org');
+let D = null, O = null, A = {}, PG = null, zoom = 0, sel = null;
+
+const imgInfo = src => new Promise(ok => { if (!src) return ok(null); const i = new Image(); i.onload = () => ok({ src, w: i.naturalWidth || 1, h: i.naturalHeight || 1 }); i.onerror = () => ok(null); i.src = src; });
+async function toDataUrl(url) { try { const b = new Blob([await (await fetch(url)).arrayBuffer()], { type: 'image/png' }); return await new Promise(ok => { const r = new FileReader(); r.onload = () => ok(r.result); r.readAsDataURL(b); }); } catch { return ''; } }
+
+async function load() {
+  D = await api('getOrgExport');
+  A.logo = await imgInfo(D.logo);
+  A.cb = await imgInfo(await toDataUrl('assets/cb-logo.png'));
+  O = Object.assign({}, OrgChart.DEFAULTS, D.preset || {}); O.over = Object.assign({}, (D.preset && D.preset.over) || {});
+  if (O.store !== 'ALL' && !D.stores.find(s => s.StoreCode === O.store)) O.store = 'ALL';
+  $('#oStore').innerHTML = `<option value="ALL">${D.sameStructure ? 'All stores' : 'Common structure'}</option>` + D.stores.map(s => `<option value="${esc(s.StoreCode)}">${esc(s.StoreCode)} · ${esc(s.StoreName)}</option>`).join('');
+  const kids = c => D.positions.filter(p => p.ParentPositionCode === c), codes = new Set(D.positions.map(p => p.PositionCode));
+  const opts = []; const walk = (p, d) => { opts.push(`<option value="${esc(p.PositionCode)}">${'· '.repeat(d)}${esc(p.PositionName)}</option>`); kids(p.PositionCode).forEach(c => walk(c, d + 1)); };
+  D.positions.filter(p => !p.ParentPositionCode || !codes.has(p.ParentPositionCode)).forEach(p => walk(p, 0));
+  $('#oRoot').innerHTML = '<option value="">Top of the structure</option>' + opts.join('');
+  $('#oTitle').placeholder = (D.companyName || 'Company') + ' — Organisation Structure';
+  syncControls(); draw();
+}
+
+function syncControls() {
+  document.querySelectorAll('#panel [data-k]').forEach(el => {
+    const k = el.dataset.k, v = O[k];
+    if (el.classList.contains('seg')) el.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.v === String(v)));
+    else if (el.type === 'checkbox') el.checked = !!v;
+    else el.value = v == null ? '' : String(v);
+  });
+}
+
+let tm = null;
+function draw(soon) { clearTimeout(tm); if (soon) { tm = setTimeout(() => draw(), 250); return; } render(); }
+function render() {
+  if (!D) return;
+  if (!D.positions.length) { $('#pv').innerHTML = '<p class="sub">No positions yet. Build the structure on the Organisation page first.</p>'; return; }
+  PG = OrgChart.page(D, Object.assign({}, O, { sel }), A);
+  $('#pv').innerHTML = PG.svg;
+  const svg = $('#pv svg');
+  svg.style.width = zoom ? Math.round(PG.PW * zoom) + 'px' : '100%';
+  $('#zVal').textContent = zoom ? Math.round(zoom * 100) + '%' : 'Fit';
+  $('#pvInfo').textContent = `Preview · ${O.paper} ${O.orient === 'P' ? 'portrait' : 'landscape'} · ${PG.T.all.length} boxes`;
+  svg.querySelectorAll('.ocb').forEach(g => g.onclick = () => { sel = g.dataset.id; render(); });
+  showSel(); showHidden();
+}
+
+function nodeOf(uid) { return PG && PG.T.all.find(n => n.uid === uid); }
+function ov(key) { return O.over[key] || (O.over[key] = {}); }
+function tidy(key) { const v = O.over[key]; if (v && !Object.keys(v).some(k => v[k] !== '' && v[k] != null && v[k] !== false)) delete O.over[key]; }
+function siblings(n) {
+  if (!n.parent) return { key: '#root', list: PG.T.roots };
+  const p = n.parent, isDot = p.dotted.includes(n);
+  return { key: isDot ? p.key + ':dot' : p.uid, list: isDot ? p.dotted : p.children };
+}
+
+function showSel() {
+  const n = sel && nodeOf(sel), box = $('#selBox');
+  if (!n) { box.classList.add('hidden'); $('#selInfo').classList.remove('hidden'); return; }
+  $('#selInfo').classList.add('hidden'); box.classList.remove('hidden');
+  const v = O.over[n.key] || {}, orig = n.p ? n.p.PositionName : (n.kind === 'division' ? n.branch : n.key.split(':').slice(2).join(':')).toUpperCase();
+  const sib = siblings(n), i = sib.list.indexOf(n);
+  box.innerHTML = `<div style="font-weight:600;margin-bottom:6px">${esc(orig)} <span class="sub" style="font-weight:400">· ${esc(n.kind === 'division' ? 'division' : n.kind === 'dept' ? 'department' : n.p.PositionCode)}</span></div>
+    <div class="f"><span>Label</span><input type="text" id="sLbl" value="${esc(v.label || '')}" placeholder="${esc(orig)}"></div>
+    <div class="f"><span>Icon</span><select id="sIcon">${OrgChart.ICONS.map(([e, t]) => `<option value="${e}" ${e === (v.icon || '') ? 'selected' : ''}>${e ? e + ' ' : ''}${esc(t)}</option>`).join('')}</select></div>
+    <div class="f"><span>Note</span><input type="text" id="sNote" value="${esc(v.note || '')}" placeholder="optional, e.g. From Jan 2027"></div>
+    <div class="f"><span>Colour</span><span class="sw"><button title="Default" data-c="" class="${v.color ? '' : 'on'}" style="background:linear-gradient(135deg,#fff 45%,#d33 46%,#d33 54%,#fff 55%)"></button>${OrgChart.SWATCH.map(c => `<button data-c="${c}" class="${v.color === c ? 'on' : ''}" style="background:${c}"></button>`).join('')}</span></div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
+      <button class="sm" id="sL" ${i > 0 ? '' : 'disabled'}>◀ Move</button><button class="sm" id="sR" ${i < sib.list.length - 1 ? '' : 'disabled'}>Move ▶</button>
+      <button class="sm danger" id="sHide">Hide${n.children.length || n.dotted.length ? ' with boxes under it' : ''}</button><button class="sm" id="sReset">Reset box</button><button class="sm" id="sDone">Done</button></div>`;
+  const set = (k, val) => { ov(n.key)[k] = val; tidy(n.key); draw(true); };
+  $('#sLbl').oninput = e => set('label', e.target.value.trim());
+  $('#sNote').oninput = e => set('note', e.target.value.trim());
+  $('#sIcon').onchange = e => { set('icon', e.target.value); };
+  box.querySelectorAll('.sw button').forEach(b => b.onclick = () => { set('color', b.dataset.c); });
+  const move = d => { const ids = sib.list.map(z => z.key); [ids[i], ids[i + d]] = [ids[i + d], ids[i]]; O.over['@' + sib.key] = ids; render(); };
+  $('#sL').onclick = () => move(-1); $('#sR').onclick = () => move(1);
+  $('#sHide').onclick = () => { ov(n.key).hide = true; sel = null; render(); };
+  $('#sReset').onclick = () => { delete O.over[n.key]; render(); };
+  $('#sDone').onclick = () => { sel = null; render(); };
+}
+
+function showHidden() {
+  const list = PG.T.hidden.filter(h => !h.dottedOff);
+  $('#hidBox').classList.toggle('hidden', !list.length);
+  $('#hidList').innerHTML = list.map(h => `<li><span>${esc(h.label)}</span><button class="sm" data-show="${esc(h.key)}">Show</button></li>`).join('');
+  $('#hidList').querySelectorAll('[data-show]').forEach(b => b.onclick = () => { const v = O.over[b.dataset.show]; if (v) { delete v.hide; tidy(b.dataset.show); } render(); });
+}
+
+// controls
+document.querySelectorAll('#panel [data-k]').forEach(el => {
+  const k = el.dataset.k;
+  if (el.classList.contains('seg')) el.querySelectorAll('button').forEach(b => b.onclick = () => { O[k] = b.dataset.v; syncControls(); draw(); });
+  else if (el.type === 'checkbox') el.onchange = () => { O[k] = el.checked; draw(); };
+  else if (el.tagName === 'SELECT') el.onchange = () => { O[k] = k === 'levels' ? Number(el.value) : el.value; sel = null; draw(); };
+  else el.oninput = () => { O[k] = el.value.trim(); draw(true); };
+});
+$('#sugIcons').onclick = () => { PG.T.all.forEach(n => { const v = O.over[n.key] || {}; if (!v.icon) { const ic = OrgChart.suggestIcon(n.p ? n.p.PositionName : n.label); if (ic) ov(n.key).icon = ic; } }); render(); };
+$('#clrIcons').onclick = () => { Object.keys(O.over).forEach(k => { if (O.over[k] && O.over[k].icon !== undefined) { delete O.over[k].icon; tidy(k); } }); render(); };
+$('#zIn').onclick = () => { zoom = Math.min(3, (zoom || ($('#pv svg') ? $('#pv svg').getBoundingClientRect().width / PG.PW : 1)) * 1.25); render(); };
+$('#zOut').onclick = () => { zoom = Math.max(0.2, (zoom || ($('#pv svg') ? $('#pv svg').getBoundingClientRect().width / PG.PW : 1)) / 1.25); render(); };
+$('#zFit').onclick = () => { zoom = 0; render(); };
+
+function fileName(ext) { return ((D.companyName || 'Organisation').replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '_') || 'Organisation') + '_Org_Chart' + (O.store !== 'ALL' ? '_' + O.store : '') + '_' + new Date().toISOString().slice(0, 10) + '.' + ext; }
+function download(blob, name) { const u = URL.createObjectURL(blob), a = document.createElement('a'); a.href = u; a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(u), 5000); }
+function exportPage() { return OrgChart.page(D, Object.assign({}, O, { sel: null }), A); }
+
+$('#xPdf').onclick = () => {
+  const pg = exportPage();
+  $('#pageCss').textContent = `@page{size:${pg.mm[0]}mm ${pg.mm[1]}mm;margin:0}`;
+  $('#printArea').innerHTML = pg.svg;
+  const t = document.title; document.title = fileName('pdf').replace(/\.pdf$/, '');
+  setTimeout(() => { window.print(); document.title = t; }, 100);
+};
+$('#xPng').onclick = async () => {
+  const b = $('#xPng'); b.disabled = true;
+  try { const pg = exportPage(); download(await OrgChart.toPng(pg, O.paper === 'A2' ? 1.5 : 2), fileName('png')); }
+  catch (e) { uiAlert('Could not create the image: ' + e.message); }
+  b.disabled = false;
+};
+$('#xDraw').onclick = () => { const pg = exportPage(); download(new Blob([OrgChart.toDrawio(pg, A)], { type: 'application/xml' }), fileName('drawio')); };
+
+$('#savePre').onclick = async () => {
+  const keep = Object.assign({}, O); delete keep.sel;
+  Object.keys(keep.over).forEach(tidy);
+  try { const r = await api('saveOrgExportPreset', { preset: keep }); showMsg($('#mPre'), r.message, true); } catch (e) { showMsg($('#mPre'), e.message); }
+};
+$('#resetAll').onclick = async () => {
+  if (!await uiConfirm('Reset every export setting and box change back to the default? Your saved settings stay until you save again.', { okText: 'Reset' })) return;
+  O = Object.assign({}, OrgChart.DEFAULTS, { over: {} }); sel = null; syncControls(); render();
+};
+
+if (S) load().catch(e => { $('#pv').innerHTML = `<p class="sub">${esc(e.message)}</p>`; });
+</script></body></html>

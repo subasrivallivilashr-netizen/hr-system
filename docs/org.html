@@ -7,7 +7,7 @@
   <section class="card">
     <div style="display:flex;justify-content:space-between;align-items:start;gap:8px;flex-wrap:wrap">
       <div><h2>Organisation structure</h2><p class="sub">Build top-down: Management → Store Manager → Sales and Non-sales teams. Headcount shows filled / approved.</p></div>
-      <button class="btn" id="addTop">+ Add top position</button>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><a class="linkbtn hidden" id="exportBtn" href="org-export.html">Export chart</a><button class="btn" id="addTop">+ Add top position</button></div>
     </div>
     <div class="toolbar">
       <div id="storeBox"><label>View for store</label><select id="storeSel"></select></div>
@@ -27,6 +27,7 @@
     <div><label>Position name</label><input name="PositionName" required placeholder="e.g. Floor Manager"></div>
     <div><label>Code <span style="font-weight:400;color:var(--muted)">(blank = auto)</span></label><input name="PositionCode"></div>
     <div><label>Reports to</label><select name="ParentPositionCode" id="parentSel"></select></div>
+    <div><label>Reporting line</label><select name="LineType"><option value="Direct">Direct</option><option value="Dotted">Dotted (advisory / assistant)</option></select></div>
     <div><label>Branch</label><select name="Branch"><option>Management</option><option>Sales</option><option>Non-sales</option></select></div>
     <div><label>Department</label><input name="Department" list="depts" placeholder="e.g. Sales, Billing"><datalist id="depts"></datalist></div>
     <div><label>Applies to</label><select name="StoreCode" id="storeCodeSel"></select></div>
@@ -42,7 +43,7 @@ const S = guard(['SuperAdmin', 'Admin', 'HR', 'Manager']);
 renderTop('org');
 const canEdit = S && ['SuperAdmin', 'Admin', 'HR'].includes(S.role);
 let D = null, collapsed = new Set();
-if (!canEdit) $('#addTop').classList.add('hidden');
+if (!canEdit) $('#addTop').classList.add('hidden'); else $('#exportBtn').classList.remove('hidden');
 
 async function load() {
   D = await api('getOrg');
@@ -78,7 +79,7 @@ function draw() {
     const ch = kids(p.PositionCode), open = !collapsed.has(p.PositionCode) || q;
     return `<li><div class="node ${esc(p.Branch)} ${p.Active === 'No' ? 'off' : ''}">
       <button class="tog" data-tog="${esc(p.PositionCode)}">${ch.length ? (open ? '▾' : '▸') : '•'}</button>
-      <div><div class="nm">${esc(p.PositionName)}</div><div class="meta">${esc(p.PositionCode)} · ${esc(p.Department || p.Branch)}${p.StoreCode !== 'ALL' ? ' · ' + esc(p.StoreCode) + ' only' : ''}</div></div>
+      <div><div class="nm">${esc(p.PositionName)}</div><div class="meta">${esc(p.PositionCode)} · ${esc(p.Department || p.Branch)}${p.StoreCode !== 'ALL' ? ' · ' + esc(p.StoreCode) + ' only' : ''}${p.LineType === 'Dotted' ? ' · <span class="dot-tag">dotted line</span>' : ''}</div></div>
       ${headcount(p, store)}
       <span class="acts"><a href="roles.html#${esc(p.PositionCode)}" style="font-size:12px;padding:4px 6px">Role</a></span>${canEdit ? `<span class="acts"><button data-add="${esc(p.PositionCode)}">+ Under</button><button data-edit="${esc(p.PositionCode)}">Edit</button></span>` : ''}
     </div>${ch.length && open ? `<ul>${ch.map(node).join('')}</ul>` : ''}</li>`;
@@ -101,7 +102,7 @@ function openPos(p, parent) {
   $('#storeCodeSel').innerHTML = '<option value="ALL">All stores</option>' + D.stores.map(s => `<option value="${esc(s.StoreCode)}">${esc(s.StoreCode)} only</option>`).join('');
   $('#depts').innerHTML = [...new Set(D.positions.map(x => x.Department).filter(Boolean))].map(d => `<option value="${esc(d)}">`).join('');
   const parentPos = D.positions.find(x => x.PositionCode === parent);
-  fill(f, p || { ParentPositionCode: parent || '', Branch: parentPos ? (parentPos.Branch === 'Management' ? 'Sales' : parentPos.Branch) : 'Management', Department: parentPos ? parentPos.Department : '', StoreCode: parentPos ? parentPos.StoreCode : 'ALL', ApprovedHeadcount: 1, Active: 'Yes' });
+  fill(f, p || { ParentPositionCode: parent || '', Branch: parentPos ? (parentPos.Branch === 'Management' ? 'Sales' : parentPos.Branch) : 'Management', Department: parentPos ? parentPos.Department : '', StoreCode: parentPos ? parentPos.StoreCode : 'ALL', ApprovedHeadcount: 1, Active: 'Yes', LineType: 'Direct' });
   f.PositionCode.readOnly = !!p;
   $('#dPosT').textContent = p ? 'Edit position' : parentPos ? 'Add position under ' + parentPos.PositionName : 'Add top position';
   $('#m-pos').textContent = '';

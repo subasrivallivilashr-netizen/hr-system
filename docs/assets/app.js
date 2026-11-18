@@ -1,5 +1,5 @@
 // Shared front-end helpers
-const API_URL = 'https://hr-api.subasrivallivilashr.workers.dev/';
+const API_URL = (window.HR_CONFIG && window.HR_CONFIG.apiUrl) || '';   // set in assets/config.js
 const SESSION_KEY = 'hr_session';
 
 const Session = {
@@ -244,8 +244,8 @@ function setCompanyName(n) { const s = Session.get(); if (s && n) { s.company = 
     if (!v || old === v) return;
     try { localStorage.setItem('hr_app_version', v); } catch {}
     try { if (sessionStorage.getItem('hr_updated') === v) return; sessionStorage.setItem('hr_updated', v); } catch {}
-    const pages = ['index', 'org', 'employees', 'roles', 'policies', 'kpi', 'hiring', 'interview', 'apply', 'lifecycle', 'letters', 'letter', 'reports', 'settings'].map(p => p + '.html');
-    const assets = ['app.js', 'app.css', 'letter.js', 'salary.js', 'files.js', 'form.js'].map(a => 'assets/' + a);
+    const pages = ['index', 'org', 'employees', 'roles', 'policies', 'kpi', 'hiring', 'interview', 'apply', 'lifecycle', 'letters', 'letter', 'reports', 'settings', 'org-export'].map(p => p + '.html');
+    const assets = ['app.js', 'app.css', 'letter.js', 'salary.js', 'files.js', 'form.js', 'orgchart.js', 'cb-logo.png', 'config.js'].map(a => 'assets/' + a);
     await Promise.all(pages.concat(assets).map(u => fetch(u, { cache: 'reload' }).catch(() => {})));
     if (old) location.reload();                     // first ever visit: files are already fresh, no reload needed
   } catch {}

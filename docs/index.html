@@ -10,10 +10,54 @@
   <button class="btn block" id="b">Sign in</button>
   <div class="msg" id="m"></div>
 </form><div class="login-foot"><span class="credit">Powered by <i></i><b>C&amp;B</b></span></div></div>
+<script src="assets/config.js"></script>
 <script src="assets/app.js"></script>
 <script>
 const HOME = { SuperAdmin: 'org.html', Admin: 'org.html', HR: 'org.html', Manager: 'org.html' };
-if (Session.get()) location.href = HOME[Session.get().role] || 'org.html';
+const SETUP = location.hash.startsWith('#cbsetup=') ? location.hash.slice(9) : '';
+if (SETUP) firstStart(SETUP); else if (Session.get()) location.href = HOME[Session.get().role] || 'org.html';
+
+// One-time setup link from the C&B setup wizard: creates the Super Admin, saves the company name and logo.
+// It works only while the app has no users; afterwards the server refuses it.
+async function firstStart(raw) {
+  const m = $('#m'), b = $('#b');
+  const done = () => history.replaceState(null, '', location.pathname + location.search);   // never leave the password in the address bar
+  let d;
+  try { d = JSON.parse(decodeURIComponent(escape(atob(raw.replace(/-/g, '+').replace(/_/g, '/'))))); if (!d.u || !d.p) throw 0; }
+  catch { done(); return showMsg(m, 'This setup link is not valid. Copy it again from the setup wizard.'); }
+  b.disabled = true; b.textContent = 'Setting up…';
+  const step = t => { m.className = 'msg ok'; m.textContent = t; };
+  try {
+    step('Checking the connection to Google Sheets…');
+    let chk;
+    try { chk = await api('setupCheck'); }
+    catch (e) { throw new Error('The app cannot read the Google spreadsheets yet: ' + e.message + ' — check that the HR folder is shared with the service account, then reload this page.'); }
+    if (chk.userCount) { done(); b.disabled = false; b.textContent = 'Sign in'; return showMsg(m, 'This app is already set up. Sign in with your username and password.'); }
+    step('Creating the Super Admin…');
+    await api('bootstrapSuperAdmin', { username: d.u, password: d.p, fullName: 'C&B Super Admin' });
+    const L = await api('login', { username: d.u, password: d.p });
+    Session.set({ token: L.token, role: L.role, name: L.fullName, stores: L.stores, empId: L.empId, company: L.company, logo: L.logo || '', modules: L.modules, languages: L.languages || [], exp: Date.now() + 12 * 3600e3 });
+    if (d.n) { step('Saving the company name…'); await api('saveCompany', { values: { CompanyName: d.n } }); }
+    if (d.l) {
+      step('Saving the logo…');
+      try {
+        const blob = await (await fetch(d.l, { cache: 'no-store' })).blob();
+        const url = await new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = no; r.readAsDataURL(blob); });
+        if (/^data:image\//.test(url)) await api('saveBranding', { values: { BrandLogo: url } });
+      } catch { /* the logo can be added later in Letters > Branding */ }
+    }
+    let upNote = '';
+    if (d.up) {
+      step('Connecting file uploads…');
+      try { await api('saveStorageSettings', { uploadUrl: d.up, retentionDays: 90 }); await api('testStorage'); }
+      catch (e) { upNote = ' File uploads are not connected yet (' + e.message + ') — finish it in Settings > Files.'; }
+    }
+    const L2 = await api('login', { username: d.u, password: d.p });   // fresh session with the new name and logo
+    Session.set({ token: L2.token, role: L2.role, name: L2.fullName, stores: L2.stores, empId: L2.empId, company: L2.company, logo: L2.logo || '', modules: L2.modules, languages: L2.languages || [], exp: Date.now() + 12 * 3600e3 });
+    done(); step('Setup complete.' + upNote + ' Opening Settings…');
+    setTimeout(() => location.href = 'settings.html', upNote ? 6000 : 900);
+  } catch (e) { b.disabled = false; b.textContent = 'Sign in'; showMsg(m, e.message); }
+}
 api('getBrandPublic').then(b => {
   if (b.companyName) { $('#lgName').textContent = b.companyName; document.title = b.companyName + ' — Login'; }
   $('#lgLang').innerHTML = langPicker(b.languages, 'lgLangSel'); wireLangPicker('lgLangSel'); startTranslator(b.languages);
